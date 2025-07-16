@@ -1,0 +1,31 @@
+// schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  email     String   @unique
+  password  String
+  beats     Beat[]   // Relation avec les beats créés par ce user
+  createdAt DateTime @default(now())
+}
+
+model Beat {
+  id          Int      @id @default(autoincrement())
+  title       String
+  filename    String   // Nom du fichier .sty (stocké en backend)
+  tempo       Int
+  description String?  // Champ optionnel
+  signature   String   // Ex: 4/4, 6/8, etc.
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+  createdAt   DateTime @default(now())
+}
