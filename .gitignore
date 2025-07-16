@@ -1,5 +1,25 @@
-node_modules
-# Keep environment variables out of version control
+# Ne pas inclure le frontend
+client/
+
+# Ne pas inclure les modules installés
+node_modules/
+
+# Environnements
 .env
 
+# Prisma généré automatiquement
 /generated/prisma
+
+# Cache Python
+__pycache__/
+
+# Fichiers audio, SoundFont, styles Yamaha, etc.
+*.wav
+*.mp3
+*.mid
+*.sty
+*.sf2
+
+# Dossiers ou fichiers temporaires
+temp/
+*.log
