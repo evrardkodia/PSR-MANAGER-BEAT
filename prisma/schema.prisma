@@ -1,5 +1,3 @@
-// schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -14,18 +12,18 @@ model User {
   username  String   @unique
   email     String   @unique
   password  String
-  beats     Beat[]   // Relation avec les beats créés par ce user
   createdAt DateTime @default(now())
+  beats     Beat[]
 }
 
 model Beat {
   id          Int      @id @default(autoincrement())
   title       String
-  filename    String   // Nom du fichier .sty (stocké en backend)
-  tempo       Int
-  description String?  // Champ optionnel
-  signature   String   // Ex: 4/4, 6/8, etc.
+  filename    String
   userId      Int
-  user        User     @relation(fields: [userId], references: [id])
   createdAt   DateTime @default(now())
+  description String?
+  signature   String
+  tempo       Int
+  user        User     @relation(fields: [userId], references: [id])
 }

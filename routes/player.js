@@ -1,23 +1,43 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const { PrismaClient } = require('@prisma/client');
-const router = express.Router();
 
+const router = express.Router();
 const prisma = new PrismaClient();
 
-const SOUND_FONT_PATH = "C:\\Users\\DELL\\PSRMANAGERSTYLE\\soundfonts\\Yamaha_PSR.sf2";
+// Chemins
+const TIMIDITY_EXE = `"C:\\Program Files (x86)\\Timidity\\timidity.exe"`;
+const TIMIDITY_CFG = `"C:\\Users\\DELL\\PSRMANAGERSTYLE\\timidity.cfg"`;
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py');
+const SOX_PATH = 'sox'; // Doit être dans le PATH système
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-/**
- * Extrait le flux MIDI contenu dans un fichier .sty Yamaha
- * @param {string} styPath - chemin du fichier .sty
- * @param {string} outputMidPath - chemin de sortie du .mid
- */
+// 🔧 Suppression du silence final
+function trimSilenceFromWav(wavPath) {
+  const trimmedPath = wavPath.replace('.wav', '_trimmed.wav');
+  try {
+    const cmd = `${SOX_PATH} "${wavPath}" "${trimmedPath}" reverse silence 1 0.1 0.1% reverse`;
+    console.log(`✂️ Suppression silence : ${cmd}`);
+    execSync(cmd, { stdio: 'inherit' });
+
+    if (fs.existsSync(trimmedPath)) {
+      fs.unlinkSync(wavPath);
+      fs.renameSync(trimmedPath, wavPath);
+      console.log(`✅ Silence supprimé : ${wavPath}`);
+    } else {
+      console.warn('⚠️ Fichier trimmed non trouvé, on garde le WAV original');
+    }
+  } catch (err) {
+    console.error('❌ Erreur suppression du silence :', err.message);
+  }
+}
+
+// Extraction brute du MIDI depuis un .sty
 function extractMidiFromSty(styPath, outputMidPath) {
   const data = fs.readFileSync(styPath);
   const headerIndex = data.indexOf(Buffer.from('MThd'));
@@ -26,9 +46,10 @@ function extractMidiFromSty(styPath, outputMidPath) {
   }
   const midiData = data.slice(headerIndex);
   fs.writeFileSync(outputMidPath, midiData);
-  console.log(`✅ MIDI extrait avec succès : ${outputMidPath}`);
+  console.log(`✅ MIDI extrait : ${outputMidPath}`);
 }
 
+// Route principale : extraction et génération audio
 router.post('/play-section', express.json(), async (req, res) => {
   const { beatId, section } = req.body;
   console.log('📥 Requête reçue :', { beatId, section });
@@ -38,72 +59,87 @@ router.post('/play-section', express.json(), async (req, res) => {
   }
 
   try {
-    // Recherche du beat en base
     const beat = await prisma.beat.findUnique({ where: { id: beatId } });
     if (!beat) {
-      console.warn('❌ Beat introuvable en base');
       return res.status(404).json({ error: 'Beat introuvable' });
     }
 
-    // Chemin du fichier .sty
     const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
     if (!fs.existsSync(inputStyPath)) {
-      console.warn('❌ Fichier .sty non trouvé');
       return res.status(404).json({ error: 'Fichier .sty non trouvé' });
     }
 
     const safeSection = section.replace(/\s+/g, '_');
-    const midPath = path.join(TEMP_DIR, `${beat.id}_${safeSection}.mid`);
+    const rawMidPath = path.join(TEMP_DIR, `${beat.id}_${safeSection}_raw.mid`);
+    const extractedMidPath = path.join(TEMP_DIR, `${beat.id}_${safeSection}.mid`);
     const wavPath = path.join(TEMP_DIR, `${beat.id}_${safeSection}.wav`);
 
-    // Extraction MIDI du .sty (toujours refaire pour garantir mise à jour)
-    extractMidiFromSty(inputStyPath, midPath);
-
-    if (!fs.existsSync(midPath)) {
-      console.error('❌ Fichier MIDI non généré');
-      return res.status(500).json({ error: 'Fichier MIDI manquant après extraction' });
+    // 1) Extraction MIDI brut
+    extractMidiFromSty(inputStyPath, rawMidPath);
+    if (!fs.existsSync(rawMidPath)) {
+      return res.status(500).json({ error: 'MIDI brut manquant après extraction' });
     }
 
-    // Conversion .mid -> .wav avec FluidSynth
-    const convertCmd = `fluidsynth -F "${wavPath}" -r 44100 -ni "${SOUND_FONT_PATH}" "${midPath}"`;
-    console.log('🎶 Conversion FluidSynth :', convertCmd);
+    // 2) Extraction section spécifique via Python
+    const extractProcess = spawnSync('python', [PY_EXTRACT_SCRIPT, rawMidPath, extractedMidPath, section], { encoding: 'utf-8' });
+    if (extractProcess.status !== 0) {
+      console.error('❌ Script Python erreur :', extractProcess.stderr);
+      return res.status(500).json({ error: `Échec extraction section ${section}` });
+    }
+
+    const outputLines = extractProcess.stdout.trim().split('\n');
+    const durationStr = outputLines[outputLines.length - 1];
+    const midiDuration = parseFloat(durationStr);
+    console.log(`🎯 MIDI section extraite (${section}) | Durée : ${midiDuration}s`);
+
+    // 3) Conversion MIDI → WAV
+    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -c ${TIMIDITY_CFG} -EFreverb=0 -EFchorus=0 -A120`;
+    console.log('🎶 Conversion TiMidity++ :', convertCmd);
     execSync(convertCmd, { stdio: 'inherit' });
 
+    // 4) Suppression du silence
+    trimSilenceFromWav(wavPath);
+
     if (!fs.existsSync(wavPath)) {
-      console.error('❌ Fichier WAV non généré');
-      return res.status(500).json({ error: 'Fichier WAV manquant après conversion' });
+      return res.status(500).json({ error: 'WAV final manquant' });
     }
 
-    console.log(`✅ Conversion réussie : ${wavPath}`);
-
+    // 5) Envoi au client
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Content-Disposition', `inline; filename="${beat.title}_${section}.wav"`);
     res.sendFile(wavPath);
-
   } catch (err) {
     console.error('❌ Erreur serveur :', err);
     res.status(500).json({ error: 'Erreur serveur interne' });
   }
 });
 
+// Nettoyage des fichiers temporaires
 router.post('/cleanup', express.json(), async (req, res) => {
   const { beatId, section } = req.body;
+
   if (!beatId || !section) {
     return res.status(400).json({ error: 'beatId et section sont requis' });
   }
 
   const safeSection = section.replace(/\s+/g, '_');
-  const midPath = path.join(TEMP_DIR, `${beatId}_${safeSection}.mid`);
-  const wavPath = path.join(TEMP_DIR, `${beatId}_${safeSection}.wav`);
+  const filesToDelete = [
+    path.join(TEMP_DIR, `${beatId}_${safeSection}_raw.mid`),
+    path.join(TEMP_DIR, `${beatId}_${safeSection}.mid`),
+    path.join(TEMP_DIR, `${beatId}_${safeSection}.wav`),
+  ];
 
   try {
-    if (fs.existsSync(midPath)) fs.unlinkSync(midPath);
-    if (fs.existsSync(wavPath)) fs.unlinkSync(wavPath);
-    console.log(`🧹 Fichiers temporaires supprimés : ${midPath}, ${wavPath}`);
-    res.status(200).json({ message: 'Fichiers temporaires supprimés' });
+    filesToDelete.forEach(filePath => {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    });
+    console.log(`🧹 Fichiers supprimés pour beatId=${beatId}, section=${section}`);
+    res.status(200).json({ message: 'Fichiers supprimés' });
   } catch (err) {
-    console.warn('⚠️ Suppression échouée :', err.message);
-    res.status(500).json({ error: 'Échec suppression fichiers' });
+    console.warn('⚠️ Problème lors du nettoyage :', err.message);
+    res.status(500).json({ error: 'Erreur lors du nettoyage' });
   }
 });
 

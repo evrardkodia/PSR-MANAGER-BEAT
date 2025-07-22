@@ -1,0 +1,10 @@
+
+1- quand j'appuie sur play, et que le voyant du main A est bleu, (pas orange) alors la lecture va lire le man A du beat en boucle, pareille pour les autres MAIN, si par exemple j'appuie play, il doit regarder lequel des voyant entre Ales boutons A B D C est allumé bleu, si c'est B qui est en bleu, celà veut dire que la lecture du play va etre le MAIN B du beat en boucle, une boucle très parfaite hein, pas des boucle nulle là.
+2- Si pendant la lecture, j'appuie sur les MAINS, ça va agir sur le beat, par exemple, si pendant la lecture d'un main quelconque en cours, j'appuie sur le boutton A alors 
+   il y aura Fillin AA + MAIN A, c'est à dire que il y aura la lecture du fillinAA suivi ensuite du MAIN A (le MAIN A doit en boucle parfaite), DOnc si si pendant la lecture d'un main quelconque en cours, j'appuie sur le boutton C alors 
+   il y aura Fillin CC + MAIN C, c'est à dire que il y aura la lecture du fillinCC suivi ensuite du MAIN C (le MAIN C doit en boucle parfaite)
+3- par défaut, les CH 11 12 13 14 15 16 sont désactivé, seul les channels 1 2 3 4 5 6 7 8 9 ET 10 sont activé âr défaut
+4- si j'appuie sur le boutton ACMP, alors tous channel s'active de 1 a 16, si je rappuie encore une fois, les channel de 11 a 16 se desactive de nouveau.
+5- Le boutton INTRO A = INTRO A du beat  , le boutton INTRO B = INTRO B du beat et qinsi de suite et jusqu'au D
+pareille pour les Ending
+6- Si un beat n'a pas par exemple de MAIN A  faudrait que le bouton A pour ce beats soit disable et le voyant du boutton soit NOIR
