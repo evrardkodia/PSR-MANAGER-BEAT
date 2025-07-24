@@ -6,6 +6,8 @@ node_modules/
 
 # Environnements
 .env
+.env.local
+.env.production
 
 # Prisma généré automatiquement
 /generated/prisma
@@ -23,8 +25,6 @@ __pycache__/
 # Dossiers ou fichiers temporaires
 temp/
 *.log
-"soundfonts/Yamaha_PSR.sf2" 
-"soundfonts/Yamaha_PSR.sf2" 
-"soundfonts/Yamaha_PSR.sf2" 
-"soundfonts/Yamaha_PSR.sf2" 
-"soundfonts/Yamaha_PSR.sf2" 
+
+# Fichier SoundFont spécifique ignoré (une seule fois)
+soundfonts/Yamaha_PSR.sf2
