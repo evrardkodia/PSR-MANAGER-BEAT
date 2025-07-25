@@ -9,14 +9,14 @@ const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// 📦 Multer : configuration stockage des fichiers
+// Configuration stockage Multer
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
+  destination: (req, file, cb) => {
     const dir = './uploads';
     if (!fs.existsSync(dir)) fs.mkdirSync(dir);
     cb(null, dir);
   },
-  filename: function (req, file, cb) {
+  filename: (req, file, cb) => {
     const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_');
     cb(null, sanitized);
   }
@@ -24,7 +24,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// 🔐 Middleware d'authentification
+// Middleware d'authentification
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Token manquant' });
@@ -38,7 +38,22 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// ✅ Route POST /api/beats/upload
+// Route publique - récupérer tous les beats publics (sans token)
+router.get('/public', async (req, res) => {
+  try {
+    const beats = await prisma.beat.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { username: true } }
+      }
+    });
+    res.json({ beats });
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur', details: err.message });
+  }
+});
+
+// Route privée - uploader un beat
 router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) => {
   const file = req.file;
   const { title, tempo, description, signature } = req.body;
@@ -59,12 +74,12 @@ router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) =
 
     res.status(201).json({ message: 'Beat uploadé avec succès', beat });
   } catch (err) {
-    console.error("❌ Erreur enregistrement beat :", err);
+    console.error("Erreur enregistrement beat :", err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
   }
 });
 
-// ✅ Route GET /api/beats/me
+// Route privée - récupérer les beats de l'utilisateur connecté
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const beats = await prisma.beat.findMany({
@@ -77,31 +92,12 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ NOUVELLE ROUTE PUBLIQUE — Voir tous les beats de tout le monde
-router.get('/public', async (req, res) => {
-  try {
-    const beats = await prisma.beat.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: {
-        user: {
-          select: { username: true }
-        }
-      }
-    });
-    res.json({ beats });
-  } catch (err) {
-    res.status(500).json({ error: 'Erreur serveur', details: err.message });
-  }
-});
-
-// ✅ Route GET /api/beats/:id
+// Route privée - récupérer un beat spécifique (vérifie que c'est bien à l'utilisateur)
 router.get('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
   try {
-    const beat = await prisma.beat.findUnique({
-      where: { id: beatId }
-    });
+    const beat = await prisma.beat.findUnique({ where: { id: beatId } });
 
     if (!beat || beat.userId !== req.user.userId) {
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
@@ -114,14 +110,12 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Route DELETE /api/beats/:id
+// Route privée - supprimer un beat (vérifie la propriété)
 router.delete('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
   try {
-    const beat = await prisma.beat.findUnique({
-      where: { id: beatId }
-    });
+    const beat = await prisma.beat.findUnique({ where: { id: beatId } });
 
     if (!beat || beat.userId !== req.user.userId) {
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
@@ -138,15 +132,13 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// ✅ Route PUT /api/beats/:id
+// Route privée - mise à jour d'un beat (vérifie la propriété)
 router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
   const beatId = parseInt(req.params.id);
   const { title, tempo, description, signature } = req.body;
 
   try {
-    const beat = await prisma.beat.findUnique({
-      where: { id: beatId }
-    });
+    const beat = await prisma.beat.findUnique({ where: { id: beatId } });
 
     if (!beat || beat.userId !== req.user.userId) {
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
@@ -173,7 +165,7 @@ router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
 
     res.json({ message: 'Beat mis à jour avec succès' });
   } catch (err) {
-    console.error('❌ Erreur mise à jour beat :', err);
+    console.error('Erreur mise à jour beat :', err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
   }
 });
