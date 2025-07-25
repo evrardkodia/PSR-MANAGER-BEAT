@@ -7,6 +7,8 @@ const { PrismaClient } = require('@prisma/client');
 const router = express.Router();
 const prisma = new PrismaClient();
 
+console.log("🚀 routes/player.js chargé");
+
 // Chemins
 const TIMIDITY_EXE = `"C:\\Program Files (x86)\\Timidity\\timidity.exe"`;
 const TIMIDITY_CFG = `"C:\\Users\\DELL\\PSRMANAGERSTYLE\\timidity.cfg"`;
@@ -16,6 +18,12 @@ const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py
 const SOX_PATH = 'sox'; // Doit être dans le PATH système
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+
+// Route test ping simple
+router.get('/ping', (req, res) => {
+  console.log("➡️ GET /api/player/ping reçu");
+  res.json({ message: 'pong' });
+});
 
 // 🔧 Suppression du silence final
 function trimSilenceFromWav(wavPath) {
@@ -50,7 +58,8 @@ function extractMidiFromSty(styPath, outputMidPath) {
 }
 
 // Route principale : extraction et génération audio
-router.post('/play-section', express.json(), async (req, res) => {
+router.post('/play-section', async (req, res) => {
+  console.log("➡️ POST /api/player/play-section appelée");
   const { beatId, section } = req.body;
   console.log('📥 Requête reçue :', { beatId, section });
 
@@ -115,7 +124,8 @@ router.post('/play-section', express.json(), async (req, res) => {
 });
 
 // Nettoyage des fichiers temporaires
-router.post('/cleanup', express.json(), async (req, res) => {
+router.post('/cleanup', async (req, res) => {
+  console.log("➡️ POST /api/player/cleanup appelée");
   const { beatId, section } = req.body;
 
   if (!beatId || !section) {
