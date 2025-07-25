@@ -12,7 +12,7 @@ const app = express();
 // Importation des routes
 const authRoutes = require('./routes/auth');
 const beatRoutes = require('./routes/beat');
-const playerRoutes = require('./routes/player'); // <-- Ajout pour lecture audio .sty
+const playerRoutes = require('./routes/player'); // <-- Pour lecture audio .sty
 
 // Middlewares globaux
 app.use(cors());
@@ -23,8 +23,9 @@ app.use('/api/auth', authRoutes);      // Authentification (login, register, etc
 app.use('/api/beats', beatRoutes);     // Gestion des beats .sty
 app.use('/api/player', playerRoutes);  // Lecture et conversion audio des .sty
 
-// Dossier statique pour servir les fichiers audio temporaires si besoin
-app.use('/static', express.static(path.join(__dirname, 'static')));
+// ✅ Dossiers statiques pour fichiers accessibles publiquement
+app.use('/static', express.static(path.join(__dirname, 'static')));         // fichiers temporaires
+app.use('/soundfonts', express.static(path.join(__dirname, 'soundfonts'))); // expose Yamaha_PSR.sf2
 
 // Lancement du serveur
 const PORT = process.env.PORT || 5000;
