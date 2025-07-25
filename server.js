@@ -1,33 +1,45 @@
-// Chargement des variables d'environnement (.env)
 require('dotenv').config();
 
-// Importations
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const morgan = require('morgan');
 
-// Initialisation de l'app Express
 const app = express();
+
+// Middleware pour logger chaque requête HTTP avec méthode, URL, temps de réponse
+app.use(morgan('combined'));
+
+// Logger corps des requêtes JSON (optionnel, attention données sensibles)
+app.use(express.json());
+app.use((req, res, next) => {
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log('📥 Corps de la requête:', JSON.stringify(req.body));
+  }
+  next();
+});
+
+app.use(cors());
 
 // Importation des routes
 const authRoutes = require('./routes/auth');
 const beatRoutes = require('./routes/beat');
-const playerRoutes = require('./routes/player'); // <-- Pour lecture audio .sty
+const playerRoutes = require('./routes/player');
 
-// Middlewares globaux
-app.use(cors());
-app.use(express.json());
+app.use('/api/auth', authRoutes);
+app.use('/api/beats', beatRoutes);
+app.use('/api/player', playerRoutes);
 
-// Routes API
-app.use('/api/auth', authRoutes);      // Authentification (login, register, etc.)
-app.use('/api/beats', beatRoutes);     // Gestion des beats .sty
-app.use('/api/player', playerRoutes);  // Lecture et conversion audio des .sty
+app.use('/static', express.static(path.join(__dirname, 'static')));
+app.use('/soundfonts', express.static(path.join(__dirname, 'soundfonts')));
 
-// ✅ Dossiers statiques pour fichiers accessibles publiquement
-app.use('/static', express.static(path.join(__dirname, 'static')));         // fichiers temporaires
-app.use('/soundfonts', express.static(path.join(__dirname, 'soundfonts'))); // expose Yamaha_PSR.sf2
+// Middleware global pour catcher les erreurs non gérées dans les routes
+app.use((err, req, res, next) => {
+  console.error('🔥 ERREUR INTERNE:', err.stack || err);
+  res.status(500).json({ error: 'Erreur serveur interne' });
+});
 
-// Lancement du serveur
+// Lancement serveur
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   const now = new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Abidjan' });
