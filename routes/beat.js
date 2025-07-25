@@ -17,8 +17,7 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: function (req, file, cb) {
-    // ✅ Nom sans timestamp si besoin : cb(null, file.originalname)
-    const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_'); // nettoyage
+    const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_');
     cb(null, sanitized);
   }
 });
@@ -71,6 +70,23 @@ router.get('/me', authMiddleware, async (req, res) => {
     const beats = await prisma.beat.findMany({
       where: { userId: req.user.userId },
       orderBy: { title: 'asc' }
+    });
+    res.json({ beats });
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur', details: err.message });
+  }
+});
+
+// ✅ NOUVELLE ROUTE PUBLIQUE — Voir tous les beats de tout le monde
+router.get('/public', async (req, res) => {
+  try {
+    const beats = await prisma.beat.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: {
+          select: { username: true }
+        }
+      }
     });
     res.json({ beats });
   } catch (err) {
