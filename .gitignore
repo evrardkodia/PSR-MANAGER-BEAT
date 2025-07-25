@@ -20,11 +20,11 @@ __pycache__/
 *.mp3
 *.mid
 *.sty
-*.sf2
+# *.sf2  # Commenté pour ne pas ignorer les fichiers .sf2
 
 # Dossiers ou fichiers temporaires
 temp/
 *.log
 
 # Fichier SoundFont spécifique ignoré (une seule fois)
-soundfonts/Yamaha_PSR.sf2
+# soundfonts/Yamaha_PSR.sf2  # Commenté pour ne pas ignorer ce fichier
