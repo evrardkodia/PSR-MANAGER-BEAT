@@ -16,10 +16,19 @@ const storage = multer.diskStorage({
     if (!fs.existsSync(dir)) fs.mkdirSync(dir);
     cb(null, dir);
   },
-  filename: (req, file, cb) => {
-    const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_');
-    cb(null, sanitized);
+ filename: (req, file, cb) => {
+  console.log('🟢 Nom original du fichier reçu :', file.originalname);
+  const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_');
+
+  // S'il n'y a pas d'extension (par exemple fichier = "fb49ea7324c4181ab8db002ed2f4ad6c")
+  if (!path.extname(sanitized)) {
+    console.warn('⚠️ Aucun extension détectée ! Ajout automatique de .sty');
+    return cb(null, sanitized + '.sty');
   }
+
+  cb(null, sanitized);
+}
+
 });
 
 const upload = multer({ storage });
