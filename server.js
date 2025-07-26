@@ -7,10 +7,21 @@ const morgan = require('morgan');
 
 const app = express();
 
-// Middleware pour logger chaque requête HTTP avec méthode, URL, temps de réponse
+// 🛡️ CORS: autorise le frontend déployé sur Render
+const allowedOrigins = [
+  'https://psr-managers-style.onrender.com', // ✅ ton frontend React Render
+  'http://localhost:3000' // 🔧 utile si tu testes en local aussi
+];
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+}));
+
+// 📋 Logger chaque requête HTTP
 app.use(morgan('combined'));
 
-// Logger corps des requêtes JSON (optionnel, attention données sensibles)
+// 📥 Logger corps des requêtes JSON (optionnel)
 app.use(express.json());
 app.use((req, res, next) => {
   if (req.body && Object.keys(req.body).length > 0) {
@@ -19,9 +30,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(cors());
-
-// Importation des routes
+// 🛣️ Routes principales
 const authRoutes = require('./routes/auth');
 const beatRoutes = require('./routes/beat');
 const playerRoutes = require('./routes/player');
@@ -30,16 +39,17 @@ app.use('/api/auth', authRoutes);
 app.use('/api/beats', beatRoutes);
 app.use('/api/player', playerRoutes);
 
+// 🗂️ Fichiers statiques
 app.use('/static', express.static(path.join(__dirname, 'static')));
 app.use('/soundfonts', express.static(path.join(__dirname, 'soundfonts')));
 
-// Middleware global pour catcher les erreurs non gérées dans les routes
+// ⚠️ Gestion des erreurs globales
 app.use((err, req, res, next) => {
   console.error('🔥 ERREUR INTERNE:', err.stack || err);
   res.status(500).json({ error: 'Erreur serveur interne' });
 });
 
-// Lancement serveur
+// 🚀 Lancement du serveur
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   const now = new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Abidjan' });
