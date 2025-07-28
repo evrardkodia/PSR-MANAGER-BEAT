@@ -74,9 +74,14 @@ router.post('/play-section', async (req, res) => {
     }
 
     const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
+    console.log('🔍 Chemin du fichier sty :', inputStyPath);
+
     if (!fs.existsSync(inputStyPath)) {
+      console.error('❌ Fichier .sty non trouvé sur le disque');
       return res.status(404).json({ error: 'Fichier .sty non trouvé' });
     }
+
+    console.log('✅ Fichier .sty trouvé');
 
     const safeSection = section.replace(/\s+/g, '_');
     const rawMidPath = path.join(TEMP_DIR, `${beat.id}_${safeSection}_raw.mid`);
