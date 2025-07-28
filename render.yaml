@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: psr-backend
+    env: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    buildCommand: ""
+    startCommand: ""
