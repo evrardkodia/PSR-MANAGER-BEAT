@@ -2,32 +2,33 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Installer les dépendances système de base (sans nodejs ni npm)
+# Installer les dépendances système
 RUN apt-get update && apt-get install -y \
     curl \
     timidity \
     python3 \
     python3-pip \
+    nodejs \
+    npm \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Installer Node.js 18 officiel depuis Nodesource
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
+# Définir le dossier de travail
 WORKDIR /app
 
-# Copier les fichiers de dépendances
+# Copier les dépendances Node et Python
 COPY package*.json ./
 COPY requirements.txt ./
 
-# Installer les dépendances Node et Python
+# Installer les dépendances
 RUN npm install
+RUN npx prisma generate
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Copier tout le code
+# Copier le reste du projet
 COPY . .
 
+# Exposer le port d'écoute (Render utilise automatiquement 10000)
 EXPOSE 10000
 
+# Démarrer l'application
 CMD ["node", "server.js"]
