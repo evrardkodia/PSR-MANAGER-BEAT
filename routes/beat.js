@@ -16,19 +16,18 @@ const storage = multer.diskStorage({
     if (!fs.existsSync(dir)) fs.mkdirSync(dir);
     cb(null, dir);
   },
- filename: (req, file, cb) => {
-  console.log('🟢 Nom original du fichier reçu :', file.originalname);
-  const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_');
+  filename: (req, file, cb) => {
+    console.log('🟢 Nom original du fichier reçu :', file.originalname);
+    const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_');
 
-  // S'il n'y a pas d'extension (par exemple fichier = "fb49ea7324c4181ab8db002ed2f4ad6c")
-  if (!path.extname(sanitized)) {
-    console.warn('⚠️ Aucun extension détectée ! Ajout automatique de .sty');
-    return cb(null, sanitized + '.sty');
+    // S'il n'y a pas d'extension (par exemple fichier = "fb49ea7324c4181ab8db002ed2f4ad6c")
+    if (!path.extname(sanitized)) {
+      console.warn('⚠️ Aucun extension détectée ! Ajout automatique de .sty');
+      return cb(null, sanitized + '.sty');
+    }
+
+    cb(null, sanitized);
   }
-
-  cb(null, sanitized);
-}
-
 });
 
 const upload = multer({ storage });
@@ -101,7 +100,7 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
-// Route privée - récupérer un beat spécifique (vérifie que c'est bien à l'utilisateur)
+// Route privée - récupérer un beat spécifique (sert directement le fichier .sty)
 router.get('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
@@ -113,7 +112,11 @@ router.get('/:id', authMiddleware, async (req, res) => {
     }
 
     const filePath = path.join(__dirname, '../uploads', beat.filename);
-    res.json({ filePath });
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Fichier .sty non trouvé' });
+    }
+
+    res.sendFile(filePath);
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
   }

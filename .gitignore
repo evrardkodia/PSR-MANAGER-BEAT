@@ -22,6 +22,10 @@ __pycache__/
 *.sty
 # *.sf2  # Commenté pour ne pas ignorer les fichiers .sf2
 
+# ⛔ Ne pas ignorer le dossier uploads
+!uploads/
+!uploads/.gitkeep
+
 # Dossiers ou fichiers temporaires
 temp/
 *.log
