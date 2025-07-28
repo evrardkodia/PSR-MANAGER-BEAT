@@ -1,9 +1,16 @@
 services:
   - type: web
-    name: psr-backend
+    name: psr-backend-docker
     env: docker
     plan: free
     region: frankfurt
     dockerfilePath: ./Dockerfile
     buildCommand: ""
     startCommand: ""
+    envVars:
+      - key: DATABASE_URL
+        value: postgresql://stydb_user:LgCSatg3CEycSm5187qUtweAItMrLrdh@dpg-d1rqvh15pdvs73efdcj0-a/stydb
+      - key: SF2_PATH
+        value: /app/soundfonts/Yamaha_PSR.sf2
+      - key: TIMIDITY_CFG
+        value: /app/timidity.cfg
