@@ -1,8 +1,6 @@
-FROM ubuntu:22.04
+FROM node:18-bullseye
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Installer les dépendances système
+# Installer curl, timidity, python3, pip3, nodejs et npm (npm & nodejs déjà dans node:18 mais on peut assurer)
 RUN apt-get update && apt-get install -y \
     curl \
     timidity \
@@ -12,23 +10,22 @@ RUN apt-get update && apt-get install -y \
     npm \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Définir le dossier de travail
 WORKDIR /app
 
-# Copier les dépendances Node et Python
+# Copier les fichiers de dépendances
 COPY package*.json ./
 COPY requirements.txt ./
 
-# Installer les dépendances
+# Installer dépendances Node.js et Prisma
 RUN npm install
 RUN npx prisma generate
+
+# Installer dépendances Python
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copier le reste du projet
 COPY . .
 
-# Exposer le port d'écoute (Render utilise automatiquement 10000)
 EXPOSE 10000
 
-# Démarrer l'application
 CMD ["node", "server.js"]
