@@ -17,20 +17,21 @@ RUN apt-get update && \
 # Définir le dossier de travail
 WORKDIR /app
 
-# Copier les fichiers nécessaires
+# Copier les fichiers nécessaires pour installation
 COPY package*.json ./
 COPY requirements.txt ./
-COPY prisma ./prisma
 
-# Installer dépendances Node.js et générer Prisma
+# Installer dépendances Node.js
 RUN npm install
-RUN npx prisma generate
 
 # Installer dépendances Python
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Copier tout le reste du projet
+# Copier tout le projet (y compris prisma)
 COPY . .
+
+# Générer les fichiers Prisma après avoir copié le dossier prisma
+RUN npx prisma generate
 
 # Exposer le port
 EXPOSE 10000
