@@ -9,18 +9,22 @@ const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Configuration stockage Multer
+// Définit un chemin absolu vers le dossier uploads (un niveau au-dessus de ce fichier)
+const uploadDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configuration stockage Multer avec dossier upload absolu
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = './uploads';
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-    cb(null, dir);
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
     console.log('🟢 Nom original du fichier reçu :', file.originalname);
     const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_');
 
-    // S'il n'y a pas d'extension
+    // Ajoute automatiquement l'extension .sty si elle est absente
     if (!path.extname(sanitized)) {
       console.warn('⚠️ Aucun extension détectée ! Ajout automatique de .sty');
       return cb(null, sanitized + '.sty');
@@ -114,7 +118,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
     }
 
-    const filePath = path.join(__dirname, '../uploads', beat.filename);
+    const filePath = path.join(uploadDir, beat.filename);
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'Fichier .sty non trouvé' });
     }
@@ -136,7 +140,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
     }
 
-    const filepath = path.join(__dirname, '../uploads', beat.filename);
+    const filepath = path.join(uploadDir, beat.filename);
     if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
 
     await prisma.beat.delete({ where: { id: beatId } });
@@ -167,7 +171,7 @@ router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
     };
 
     if (req.file) {
-      const oldFilePath = path.join(__dirname, '../uploads', beat.filename);
+      const oldFilePath = path.join(uploadDir, beat.filename);
       if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
 
       updateData.filename = req.file.filename;
