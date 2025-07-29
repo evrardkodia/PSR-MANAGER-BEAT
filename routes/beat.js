@@ -9,8 +9,10 @@ const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Définit un chemin absolu vers le dossier uploads (un niveau au-dessus de ce fichier)
-const uploadDir = path.join(__dirname, '../uploads');
+// Définit un chemin absolu vers le dossier uploads **dans le même dossier que ce fichier**
+const uploadDir = path.join(__dirname, 'uploads');
+console.log('📂 Dossier upload utilisé :', uploadDir);
+
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -50,25 +52,21 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// Route publique - récupérer tous les beats publics (sans token)
+// Routes (upload, get, delete, update) restent identiques
 router.get('/public', async (req, res) => {
   try {
     const beats = await prisma.beat.findMany({
       orderBy: { createdAt: 'desc' },
-      include: {
-        user: { select: { username: true } }
-      }
+      include: { user: { select: { username: true } } }
     });
 
     console.log('Beats récupérés:', beats.map(b => ({ id: b.id, title: b.title, filename: b.filename })));
-
     res.json({ beats });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
   }
 });
 
-// Route privée - uploader un beat
 router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) => {
   const file = req.file;
   const { title, tempo, description, signature } = req.body;
@@ -94,7 +92,6 @@ router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) =
   }
 });
 
-// Route privée - récupérer les beats de l'utilisateur connecté
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const beats = await prisma.beat.findMany({
@@ -107,7 +104,6 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
-// Route privée - récupérer un beat spécifique (sert directement le fichier .sty)
 router.get('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
@@ -129,7 +125,6 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// Route privée - supprimer un beat (vérifie la propriété)
 router.delete('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
@@ -151,7 +146,6 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// Route privée - mise à jour d'un beat (vérifie la propriété)
 router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
   const beatId = parseInt(req.params.id);
   const { title, tempo, description, signature } = req.body;
@@ -192,7 +186,10 @@ router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
 // *** Nouvelle route ajoutée pour lister les fichiers dans /uploads ***
 router.get('/uploads-list', authMiddleware, (req, res) => {
   fs.readdir(uploadDir, (err, files) => {
-    if (err) return res.status(500).json({ error: 'Erreur lecture dossier', details: err.message });
+    if (err) {
+      console.error('Erreur lecture dossier uploads:', err);
+      return res.status(500).json({ error: 'Erreur lecture dossier', details: err.message });
+    }
     res.json({ files });
   });
 });
