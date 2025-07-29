@@ -189,4 +189,12 @@ router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
   }
 });
 
+// *** Nouvelle route ajoutée pour lister les fichiers dans /uploads ***
+router.get('/uploads-list', authMiddleware, (req, res) => {
+  fs.readdir(uploadDir, (err, files) => {
+    if (err) return res.status(500).json({ error: 'Erreur lecture dossier', details: err.message });
+    res.json({ files });
+  });
+});
+
 module.exports = router;
