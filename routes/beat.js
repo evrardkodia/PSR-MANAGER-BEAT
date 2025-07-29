@@ -20,7 +20,7 @@ const storage = multer.diskStorage({
     console.log('🟢 Nom original du fichier reçu :', file.originalname);
     const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_');
 
-    // S'il n'y a pas d'extension (par exemple fichier = "fb49ea7324c4181ab8db002ed2f4ad6c")
+    // S'il n'y a pas d'extension
     if (!path.extname(sanitized)) {
       console.warn('⚠️ Aucun extension détectée ! Ajout automatique de .sty');
       return cb(null, sanitized + '.sty');
@@ -55,6 +55,9 @@ router.get('/public', async (req, res) => {
         user: { select: { username: true } }
       }
     });
+
+    console.log('Beats récupérés:', beats.map(b => ({ id: b.id, title: b.title, filename: b.filename })));
+
     res.json({ beats });
   } catch (err) {
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
