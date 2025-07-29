@@ -4,41 +4,43 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-
-const logger = require('./logger');  // <-- Import pino logger
+const logger = require('./logger');
 
 const app = express();
 
-// 🛡️ CORS: autorise le frontend déployé sur Render
+// ✅ Liste des domaines autorisés (frontend + localhost)
 const allowedOrigins = [
-  'https://psr-managers-style.onrender.com',
+  'https://psr-managers-styles.onrender.com',
   'http://localhost:3000'
 ];
 
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true,
-}));
-
-// 📋 Logger chaque requête HTTP avec pino via middleware express (optionnel)
-// Il existe pino-http pour logger automatiquement les requêtes :
-// const pinoHttp = require('pino-http')({ logger });
-// app.use(pinoHttp);
 app.use((req, res, next) => {
-  logger.info({ method: req.method, url: req.url }, 'Requête HTTP reçue');
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200); // Requête préflight CORS
+  }
+
   next();
 });
 
-// 📥 Logger corps des requêtes JSON (optionnel)
+// 📥 Middleware JSON + logger
 app.use(express.json());
 app.use((req, res, next) => {
+  logger.info({ method: req.method, url: req.url }, '📥 Requête HTTP reçue');
   if (req.body && Object.keys(req.body).length > 0) {
-    logger.info({ body: req.body }, '📥 Corps de la requête');
+    logger.info({ body: req.body }, '📦 Corps de la requête');
   }
   next();
 });
 
-// 🛣️ Routes principales
+// 🛣️ Routes
 const authRoutes = require('./routes/auth');
 const beatRoutes = require('./routes/beat');
 const playerRoutes = require('./routes/player');
@@ -51,24 +53,18 @@ app.use('/api/player', playerRoutes);
 app.use('/static', express.static(path.join(__dirname, 'static')));
 app.use('/soundfonts', express.static(path.join(__dirname, 'soundfonts')));
 
-// Création automatique dossiers nécessaires
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-  logger.info('📁 Dossier uploads créé automatiquement');
-} else {
-  logger.info('📁 Dossier uploads déjà existant');
-}
+// 📁 Création automatique des dossiers
+['uploads', 'temp'].forEach((dir) => {
+  const fullPath = path.join(__dirname, dir);
+  if (!fs.existsSync(fullPath)) {
+    fs.mkdirSync(fullPath, { recursive: true });
+    logger.info(`📁 Dossier ${dir} créé automatiquement`);
+  } else {
+    logger.info(`📁 Dossier ${dir} déjà existant`);
+  }
+});
 
-const tempDir = path.join(__dirname, 'temp');
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true });
-  logger.info('📁 Dossier temp créé automatiquement');
-} else {
-  logger.info('📁 Dossier temp déjà existant');
-}
-
-// ⚠️ Gestion des erreurs globales
+// ❌ Gestion des erreurs
 app.use((err, req, res, next) => {
   logger.error(err, '🔥 ERREUR INTERNE');
   res.status(500).json({ error: 'Erreur serveur interne' });
@@ -78,5 +74,5 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   const now = new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Abidjan' });
-  logger.info(`✅ Server running on http://localhost:${PORT} — 🕒 Démarré à ${now}`);
+  logger.info(`✅ Serveur lancé sur http://localhost:${PORT} — 🕒 Démarré à ${now}`);
 });
