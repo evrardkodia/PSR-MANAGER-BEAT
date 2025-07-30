@@ -10,8 +10,8 @@ const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // 📂 Dossier de destination pour les fichiers uploadés
-const uploadDir = path.join(__dirname, 'uploads');
-console.log('📂 Dossier upload utilisé :', uploadDir);
+const uploadDir = path.resolve(process.cwd(), 'uploads');
+console.log('📂 Dossier upload utilisé (uploadDir) :', uploadDir);
 
 // Crée le dossier s’il n’existe pas
 if (!fs.existsSync(uploadDir)) {
@@ -53,7 +53,7 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// 📂 ROUTE pour lister les fichiers dans le dossier /uploads (placée avant /:id)
+// 📂 ROUTE pour lister les fichiers dans le dossier /uploads
 router.get('/uploads-list', authMiddleware, (req, res) => {
   fs.readdir(uploadDir, (err, files) => {
     if (err) {
@@ -118,7 +118,7 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
-// 🆔 GET beat par ID
+// 🆔 GET beat par ID — ENVOIE LE FICHIER .sty
 router.get('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
@@ -130,6 +130,9 @@ router.get('/:id', authMiddleware, async (req, res) => {
     }
 
     const filePath = path.join(uploadDir, beat.filename);
+    console.log('Chemin complet du fichier demandé :', filePath);
+    console.log('Fichier existe ? ', fs.existsSync(filePath));
+
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'Fichier .sty non trouvé' });
     }
