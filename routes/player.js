@@ -96,6 +96,10 @@ router.post('/play-section', async (req, res) => {
 
     // 2) Extraction section spécifique via Python
     const extractProcess = spawnSync('python', [PY_EXTRACT_SCRIPT, rawMidPath, extractedMidPath, section], { encoding: 'utf-8' });
+    
+    console.log('Python stdout:', extractProcess.stdout);
+    console.error('Python stderr:', extractProcess.stderr);
+
     if (extractProcess.status !== 0) {
       console.error('❌ Script Python erreur :', extractProcess.stderr);
       return res.status(500).json({ error: `Échec extraction section ${section}` });
@@ -105,6 +109,14 @@ router.post('/play-section', async (req, res) => {
     const durationStr = outputLines[outputLines.length - 1];
     const midiDuration = parseFloat(durationStr);
     console.log(`🎯 MIDI section extraite (${section}) | Durée : ${midiDuration}s`);
+
+    // Diagnostic : liste fichiers dans temp après extraction Python
+    try {
+      const files = fs.readdirSync(TEMP_DIR);
+      console.log('🔎 Contenu de temp après extraction Python:', files);
+    } catch (err) {
+      console.error('❌ Erreur lecture dossier temp:', err);
+    }
 
     // 3) Conversion MIDI → WAV
     const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -c ${TIMIDITY_CFG} -EFreverb=0 -EFchorus=0 -A120`;
