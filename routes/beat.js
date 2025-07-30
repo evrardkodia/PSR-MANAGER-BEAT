@@ -7,6 +7,8 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const jwt = require('jsonwebtoken');
 
+const { uploadToDrive } = require('../utils/googleDrive');
+
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // 📂 Dossier de destination pour les fichiers uploadés
@@ -87,6 +89,9 @@ router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) =
   if (!file) return res.status(400).json({ error: 'Aucun fichier fourni' });
 
   try {
+    const googleDriveResult = await uploadToDrive(file.path, file.filename);
+    console.log('✅ Upload Google Drive :', googleDriveResult);
+
     const beat = await prisma.beat.create({
       data: {
         title,
@@ -94,7 +99,8 @@ router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) =
         description,
         signature,
         filename: file.filename,
-        userId: req.user.userId
+        userId: req.user.userId,
+        driveUrl: googleDriveResult.webViewLink
       }
     });
 
@@ -118,7 +124,7 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
-// 🆔 GET beat par ID — ENVOIE LE FICHIER .sty
+// 🏢 GET beat par ID — ENVOIE LE FICHIER .sty
 router.get('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
@@ -189,6 +195,8 @@ router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
       if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
 
       updateData.filename = req.file.filename;
+      const driveUpload = await uploadToDrive(req.file.path, req.file.filename);
+      updateData.driveUrl = driveUpload.webViewLink;
     }
 
     await prisma.beat.update({

@@ -11,6 +11,8 @@ node_modules/
 
 # Prisma généré automatiquement
 /generated/prisma
+/credentials/
+
 
 # Cache Python
 __pycache__/

@@ -4,10 +4,25 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+const { google } = require('googleapis');
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'https://psr-backend-sdwl.onrender.com/oauth2callback';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://psr-managers-styles.onrender.com';
 
-// ✅ ROUTE: /api/auth/register
+if (!JWT_SECRET || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+  console.warn('⚠️ Assure-toi que JWT_SECRET, GOOGLE_CLIENT_ID et GOOGLE_CLIENT_SECRET sont définis dans .env');
+}
+
+const oauth2Client = new google.auth.OAuth2(
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_REDIRECT_URI
+);
+
+// --- ROUTE INSCRIPTION ---
 router.post('/register', async (req, res) => {
   const { username, email, password } = req.body;
   console.log("📥 Reçu pour register:", req.body);
@@ -40,7 +55,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// ✅ ROUTE: /api/auth/login
+// --- ROUTE CONNEXION ---
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
   console.log("🔐 Tentative de connexion pour :", email);
@@ -49,6 +64,11 @@ router.post('/login', async (req, res) => {
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
       return res.status(404).json({ error: 'Utilisateur non trouvé' });
+    }
+
+    // Pour les utilisateurs OAuth sans password (password vide), refuser login classique
+    if (!user.password) {
+      return res.status(400).json({ error: 'Utilisateur enregistré via OAuth, utilisez la connexion Google.' });
     }
 
     const validPassword = await bcrypt.compare(password, user.password);
@@ -70,7 +90,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// ✅ Middleware de vérification du token JWT
+// --- Middleware vérification JWT ---
 const verifyToken = (req, res, next) => {
   const header = req.headers['authorization'];
   const token = header && header.split(' ')[1];
@@ -84,18 +104,72 @@ const verifyToken = (req, res, next) => {
   });
 };
 
-// ✅ ROUTE: /api/auth/me
+// --- ROUTE GET USER ME ---
 router.get('/me', verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.userId },
-      select: { id: true, email: true, username: true } // ← Ajout du nom d'utilisateur ici
+      select: { id: true, email: true, username: true }
     });
 
     res.json(user);
   } catch (err) {
     console.error("❌ Erreur dans /me :", err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
+  }
+});
+
+// --- ROUTE POUR OBTENIR URL AUTH GOOGLE ---
+router.get('/google/url', (req, res) => {
+  const scopes = [
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email',
+  ];
+
+  const url = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: scopes,
+  });
+
+  res.json({ url });
+});
+
+// --- ROUTE CALLBACK GOOGLE OAUTH2 ---
+router.get('/oauth2callback', async (req, res) => {
+  const code = req.query.code;
+  if (!code) return res.status(400).send('Missing code');
+
+  try {
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const userInfo = await oauth2.userinfo.get();
+
+    // Cherche un utilisateur existant par email
+    let user = await prisma.user.findUnique({ where: { email: userInfo.data.email } });
+
+    // Si pas trouvé, créer un utilisateur avec un password vide (OAuth)
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          email: userInfo.data.email,
+          username: userInfo.data.name || userInfo.data.email,
+          password: '',  // vide car connexion via OAuth
+        }
+      });
+      console.log('✅ Utilisateur OAuth créé:', user.email);
+    }
+
+    // Générer JWT
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1d' });
+
+    // Rediriger vers frontend avec token dans query (à adapter selon frontend)
+    res.redirect(`${FRONTEND_URL}/?token=${token}`);
+  } catch (err) {
+    console.error('❌ Erreur OAuth2 Google:', err);
+    res.status(500).send('Erreur OAuth Google');
   }
 });
 
