@@ -1,7 +1,10 @@
-// Création du fichier credentials/service-account.json depuis variable d’environnement
 const fs = require('fs');
 const path = require('path');
 
+// ✅ Charger immédiatement les variables d'environnement
+require('dotenv').config();
+
+// ✅ Créer le fichier credentials/service-account.json dès le début
 const credentialsPath = path.resolve(__dirname, 'credentials/service-account.json');
 
 if (!fs.existsSync(credentialsPath)) {
@@ -14,9 +17,6 @@ if (!fs.existsSync(credentialsPath)) {
   fs.mkdirSync(path.dirname(credentialsPath), { recursive: true });
   fs.writeFileSync(credentialsPath, jsonContent, 'utf8');
 }
-
-// Chargement des variables d'environnement
-require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
