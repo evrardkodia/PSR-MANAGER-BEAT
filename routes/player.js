@@ -158,4 +158,24 @@ router.post('/cleanup', async (req, res) => {
   }
 });
 
+// === NOUVELLE ROUTE POUR LISTER LE CONTENU DE /temp ===
+router.get('/temp', (req, res) => {
+  console.log("➡️ GET /api/player/temp appelée");
+
+  try {
+    const files = fs.readdirSync(TEMP_DIR);
+    const midiWavFiles = files.filter(file => file.endsWith('.mid') || file.endsWith('.wav'));
+
+    console.log(`📂 Contenu de temp/ :\n${midiWavFiles.join('\n') || 'Aucun fichier .mid/.wav trouvé'}`);
+
+    res.json({
+      count: midiWavFiles.length,
+      files: midiWavFiles
+    });
+  } catch (err) {
+    console.error('❌ Erreur lors de la lecture du dossier temp :', err.message);
+    res.status(500).json({ error: 'Erreur lecture du dossier temp' });
+  }
+});
+
 module.exports = router;
