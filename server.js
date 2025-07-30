@@ -9,13 +9,25 @@ const credentialsPath = path.resolve(__dirname, 'credentials/service-account.jso
 
 if (!fs.existsSync(credentialsPath)) {
   console.log('✍️ Création du fichier credentials/service-account.json depuis variable d’environnement');
-  const jsonContent = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  let jsonContent = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!jsonContent) {
     console.error('❌ Variable GOOGLE_SERVICE_ACCOUNT_JSON non définie !');
     process.exit(1);
   }
+  // Si la variable est une chaîne JSON encodée, on la parse (optionnel)
+  try {
+    if (typeof jsonContent === 'string' && jsonContent.trim().startsWith('{')) {
+      jsonContent = JSON.stringify(JSON.parse(jsonContent), null, 2);
+    }
+  } catch (e) {
+    console.error('❌ Impossible de parser GOOGLE_SERVICE_ACCOUNT_JSON');
+    process.exit(1);
+  }
+
   fs.mkdirSync(path.dirname(credentialsPath), { recursive: true });
   fs.writeFileSync(credentialsPath, jsonContent, 'utf8');
+} else {
+  console.log('✅ Fichier credentials/service-account.json déjà existant');
 }
 
 const express = require('express');
