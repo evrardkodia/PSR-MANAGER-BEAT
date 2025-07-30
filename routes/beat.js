@@ -9,15 +9,16 @@ const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// Définit un chemin absolu vers le dossier uploads **dans le même dossier que ce fichier**
+// 📂 Dossier de destination pour les fichiers uploadés
 const uploadDir = path.join(__dirname, 'uploads');
 console.log('📂 Dossier upload utilisé :', uploadDir);
 
+// Crée le dossier s’il n’existe pas
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Configuration stockage Multer avec dossier upload absolu
+// Configuration Multer
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadDir);
@@ -26,7 +27,7 @@ const storage = multer.diskStorage({
     console.log('🟢 Nom original du fichier reçu :', file.originalname);
     const sanitized = file.originalname.replace(/[^a-zA-Z0-9-_\\.]/g, '_');
 
-    // Ajoute automatiquement l'extension .sty si elle est absente
+    // Ajout .sty si nécessaire
     if (!path.extname(sanitized)) {
       console.warn('⚠️ Aucun extension détectée ! Ajout automatique de .sty');
       return cb(null, sanitized + '.sty');
@@ -38,7 +39,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// Middleware d'authentification
+// Middleware JWT d’authentification
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Token manquant' });
@@ -52,7 +53,18 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// Routes (upload, get, delete, update) restent identiques
+// 📂 ROUTE pour lister les fichiers dans le dossier /uploads (placée avant /:id)
+router.get('/uploads-list', authMiddleware, (req, res) => {
+  fs.readdir(uploadDir, (err, files) => {
+    if (err) {
+      console.error('Erreur lecture dossier uploads:', err);
+      return res.status(500).json({ error: 'Erreur lecture dossier', details: err.message });
+    }
+    res.json({ files });
+  });
+});
+
+// 🟢 GET tous les beats publics
 router.get('/public', async (req, res) => {
   try {
     const beats = await prisma.beat.findMany({
@@ -67,6 +79,7 @@ router.get('/public', async (req, res) => {
   }
 });
 
+// ⬆️ POST upload beat
 router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) => {
   const file = req.file;
   const { title, tempo, description, signature } = req.body;
@@ -92,6 +105,7 @@ router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) =
   }
 });
 
+// 👤 GET beats de l'utilisateur connecté
 router.get('/me', authMiddleware, async (req, res) => {
   try {
     const beats = await prisma.beat.findMany({
@@ -104,6 +118,7 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
+// 🆔 GET beat par ID
 router.get('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
@@ -125,6 +140,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// ❌ DELETE beat
 router.delete('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
@@ -146,6 +162,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// ✏️ PUT update beat
 router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
   const beatId = parseInt(req.params.id);
   const { title, tempo, description, signature } = req.body;
@@ -181,17 +198,6 @@ router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
     console.error('Erreur mise à jour beat :', err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
   }
-});
-
-// *** Nouvelle route ajoutée pour lister les fichiers dans /uploads ***
-router.get('/uploads-list', authMiddleware, (req, res) => {
-  fs.readdir(uploadDir, (err, files) => {
-    if (err) {
-      console.error('Erreur lecture dossier uploads:', err);
-      return res.status(500).json({ error: 'Erreur lecture dossier', details: err.message });
-    }
-    res.json({ files });
-  });
 });
 
 module.exports = router;
