@@ -18,6 +18,10 @@ const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py');
 const SOX_PATH = 'sox'; // Doit être dans le PATH système
 
+// Chemin SoundFont récupéré depuis variable d'environnement SF2_PATH ou fallback
+const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
+console.log('📀 Utilisation du SoundFont :', SF2_PATH);
+
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -129,8 +133,8 @@ router.post('/play-section', async (req, res) => {
       console.error('❌ Erreur lecture dossier temp:', err);
     }
 
-    // 3) Conversion MIDI → WAV
-    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -c ${TIMIDITY_CFG} -EFreverb=0 -EFchorus=0 -A120`;
+    // 3) Conversion MIDI → WAV avec SoundFont local
+    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -c ${TIMIDITY_CFG} -EFreverb=0 -EFchorus=0 -A120 -soundfont "${SF2_PATH}"`;
     console.log('🎶 Conversion TiMidity++ :', convertCmd);
     execSync(convertCmd, { stdio: 'inherit' });
 

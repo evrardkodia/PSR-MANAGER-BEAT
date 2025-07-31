@@ -10,6 +10,14 @@ const logger = require('./logger');
 
 const app = express();
 
+// ✅ Vérification du fichier SoundFont
+const soundfontPath = process.env.SF2_PATH || path.join(__dirname, 'soundfonts', 'Yamaha_PSR.sf2');
+if (!fs.existsSync(soundfontPath)) {
+  logger.error(`❌ Fichier SoundFont introuvable : ${soundfontPath}`);
+  process.exit(1); // Arrêter le serveur si le fichier est manquant
+}
+logger.info(`🎹 SoundFont utilisé : ${soundfontPath}`);
+
 // ✅ Configuration CORS
 const allowedOrigins = [
   'https://psr-managers-styles.onrender.com',
