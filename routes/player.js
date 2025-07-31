@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const fetch = require('node-fetch'); // Ajouté pour le téléchargement
+const fetch = require('node-fetch');
 const { execSync, spawnSync } = require('child_process');
 const { PrismaClient } = require('@prisma/client');
 
@@ -31,7 +31,7 @@ router.get('/ping', (req, res) => {
   res.json({ message: 'pong' });
 });
 
-// 🔧 Suppression du silence final
+// Suppression du silence final
 function trimSilenceFromWav(wavPath) {
   const trimmedPath = wavPath.replace('.wav', '_trimmed.wav');
   try {
@@ -63,7 +63,7 @@ function extractMidiFromSty(styPath, outputMidPath) {
   console.log(`✅ MIDI extrait : ${outputMidPath}`);
 }
 
-// Fonction utilitaire pour téléchargement du .sty depuis Supabase
+// Téléchargement du .sty depuis Supabase
 async function downloadStyFromUrl(url, destPath) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -95,7 +95,7 @@ router.post('/play-section', async (req, res) => {
 
     const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
 
-    // Téléchargement obligatoire du fichier .sty depuis Supabase
+    // Téléchargement du fichier .sty
     await downloadStyFromUrl(beat.url, inputStyPath);
 
     const safeSection = section.replace(/\s+/g, '_');
@@ -109,14 +109,21 @@ router.post('/play-section', async (req, res) => {
       return res.status(500).json({ error: 'MIDI brut manquant après extraction' });
     }
 
-    // 2) Extraction section spécifique via Python
+    // 2) Extraction section via script Python
     const extractProcess = spawnSync('python', [PY_EXTRACT_SCRIPT, rawMidPath, extractedMidPath, section], { encoding: 'utf-8' });
 
-    console.log('Python stdout:', extractProcess.stdout);
-    console.error('Python stderr:', extractProcess.stderr);
+    console.log('Python stdout:', extractProcess.stdout || 'empty stdout');
+    console.error('Python stderr:', extractProcess.stderr || 'empty stderr');
+    console.log('Extract process error:', extractProcess.error || 'none');
+    console.log('Extract process status:', extractProcess.status);
 
     if (extractProcess.status !== 0) {
-      console.error('❌ Script Python erreur :', extractProcess.stderr);
+      // Tenter de lire un fichier de debug python si existant
+      const debugLogPath = path.join(TEMP_DIR, 'python_debug.log');
+      if (fs.existsSync(debugLogPath)) {
+        const debugLog = fs.readFileSync(debugLogPath, 'utf-8');
+        console.error('Contenu python_debug.log:', debugLog);
+      }
       return res.status(500).json({ error: `Échec extraction section ${section}` });
     }
 
@@ -186,7 +193,7 @@ router.post('/cleanup', async (req, res) => {
   }
 });
 
-// === NOUVELLE ROUTE POUR LISTER LE CONTENU DE /temp ===
+// Route pour lister le contenu de /temp
 router.get('/temp', (req, res) => {
   console.log("➡️ GET /api/player/temp appelée");
 
