@@ -31,13 +31,13 @@ async function uploadFileToSupabaseStorage(filePath, filename) {
     throw error;
   }
 
-  const { publicURL, error: urlError } = supabase.storage.from(bucket).getPublicUrl(filename);
+  const { data: urlData, error: urlError } = supabase.storage.from(bucket).getPublicUrl(filename);
   if (urlError) {
     console.error('Erreur récupération URL publique:', urlError);
     throw urlError;
   }
 
-  return publicURL;
+  return urlData.publicUrl;
 }
 
 /**
