@@ -110,7 +110,7 @@ router.post('/play-section', async (req, res) => {
     }
 
     // 2) Extraction section via script Python
-    const extractProcess = spawnSync('python', [PY_EXTRACT_SCRIPT, rawMidPath, extractedMidPath, section], { encoding: 'utf-8' });
+    const extractProcess = spawnSync('python3', [PY_EXTRACT_SCRIPT, rawMidPath, extractedMidPath, section], { encoding: 'utf-8' });
 
     console.log('Python stdout:', extractProcess.stdout || 'empty stdout');
     console.error('Python stderr:', extractProcess.stderr || 'empty stderr');
