@@ -25,5 +25,6 @@ model Beat {
   description String?
   signature   String
   tempo       Int
+  url         String?  // URL publique du beat, optionnelle
   user        User     @relation(fields: [userId], references: [id])
 }
