@@ -12,7 +12,6 @@ console.log("🚀 routes/player.js chargé");
 
 // Chemins
 const TIMIDITY_EXE = 'timidity'; // Linux: binaire dans le PATH
-const 
 const TIMIDITY_CFG = '/app/timidity.cfg'; // Ton fichier cfg à la racine du projet sur Render
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
