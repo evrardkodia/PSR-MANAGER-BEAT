@@ -4,32 +4,6 @@ const path = require('path');
 // ✅ Charger les variables d'environnement
 require('dotenv').config();
 
-// ✅ Créer le fichier credentials/service-account.json depuis la variable d’environnement
-const credentialsPath = path.resolve(__dirname, 'credentials/service-account.json');
-
-if (!fs.existsSync(credentialsPath)) {
-  console.log('✍️ Création du fichier credentials/service-account.json depuis la variable GOOGLE_SERVICE_ACCOUNT_JSON');
-  let jsonContent = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!jsonContent) {
-    console.error('❌ Variable GOOGLE_SERVICE_ACCOUNT_JSON non définie');
-    process.exit(1);
-  }
-
-  try {
-    if (typeof jsonContent === 'string' && jsonContent.trim().startsWith('{')) {
-      jsonContent = JSON.stringify(JSON.parse(jsonContent), null, 2);
-    }
-  } catch (e) {
-    console.error('❌ Erreur de parsing du JSON de GOOGLE_SERVICE_ACCOUNT_JSON');
-    process.exit(1);
-  }
-
-  fs.mkdirSync(path.dirname(credentialsPath), { recursive: true });
-  fs.writeFileSync(credentialsPath, jsonContent, 'utf8');
-} else {
-  console.log('✅ Fichier credentials/service-account.json déjà existant');
-}
-
 const express = require('express');
 const cors = require('cors');
 const logger = require('./logger');

@@ -7,11 +7,11 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const jwt = require('jsonwebtoken');
 
-const { uploadToDrive } = require('../utils/googleDrive');
+const { uploadFileToSupabaseStorage } = require('../utils/supabaseStorage');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
-// 📂 Dossier de destination pour les fichiers uploadés
+// 📂 Dossier de destination temporaire pour les fichiers uploadés
 const uploadDir = path.resolve(process.cwd(), 'uploads');
 console.log('📂 Dossier upload utilisé (uploadDir) :', uploadDir);
 
@@ -55,7 +55,7 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// 📂 ROUTE pour lister les fichiers dans le dossier /uploads
+// 📂 ROUTE pour lister les fichiers dans le dossier /uploads (temporaire)
 router.get('/uploads-list', authMiddleware, (req, res) => {
   fs.readdir(uploadDir, (err, files) => {
     if (err) {
@@ -89,9 +89,14 @@ router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) =
   if (!file) return res.status(400).json({ error: 'Aucun fichier fourni' });
 
   try {
-    const googleDriveResult = await uploadToDrive(file.path, file.filename);
-    console.log('✅ Upload Google Drive :', googleDriveResult);
+    // Upload sur Supabase Storage
+    const supabaseUrl = await uploadFileToSupabaseStorage(file.path, file.filename);
+    console.log('✅ Upload Supabase Storage :', supabaseUrl);
 
+    // Supprime le fichier local après upload
+    fs.unlinkSync(file.path);
+
+    // Enregistre en base
     const beat = await prisma.beat.create({
       data: {
         title,
@@ -100,7 +105,7 @@ router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) =
         signature,
         filename: file.filename,
         userId: req.user.userId,
-        driveUrl: googleDriveResult.webViewLink
+        driveUrl: supabaseUrl  // renommer en storageUrl si tu préfères
       }
     });
 
@@ -124,7 +129,7 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
-// 🏢 GET beat par ID — ENVOIE LE FICHIER .sty
+// 🏢 GET beat par ID — ENVOIE LE FICHIER .sty LOCAL (attention, ici on suppose que le fichier local existe)
 router.get('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
@@ -140,7 +145,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
     console.log('Fichier existe ? ', fs.existsSync(filePath));
 
     if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Fichier .sty non trouvé' });
+      return res.status(404).json({ error: 'Fichier .sty non trouvé localement. Utilise plutôt l’URL de stockage.' });
     }
 
     res.sendFile(filePath);
@@ -160,8 +165,11 @@ router.delete('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
     }
 
+    // Supprime localement si fichier local existant
     const filepath = path.join(uploadDir, beat.filename);
     if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+
+    // TODO : Supprimer dans Supabase Storage aussi (à implémenter)
 
     await prisma.beat.delete({ where: { id: beatId } });
 
@@ -191,12 +199,18 @@ router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
     };
 
     if (req.file) {
+      // Supprime ancien fichier local si existant
       const oldFilePath = path.join(uploadDir, beat.filename);
       if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
 
       updateData.filename = req.file.filename;
-      const driveUpload = await uploadToDrive(req.file.path, req.file.filename);
-      updateData.driveUrl = driveUpload.webViewLink;
+
+      // Upload nouveau fichier sur Supabase Storage
+      const supabaseUrl = await uploadFileToSupabaseStorage(req.file.path, req.file.filename);
+      updateData.driveUrl = supabaseUrl;
+
+      // Supprime fichier local temporaire
+      fs.unlinkSync(req.file.path);
     }
 
     await prisma.beat.update({
