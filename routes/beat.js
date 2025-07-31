@@ -7,7 +7,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const jwt = require('jsonwebtoken');
 
-const { uploadFileToSupabaseStorage } = require('../utils/supabaseStorage');
+const { uploadFileToSupabaseStorage, deleteFileFromSupabaseStorage } = require('../utils/supabaseStorage');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -55,7 +55,7 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// 📂 ROUTE pour lister les fichiers dans le dossier /uploads (temporaire)
+// 📂 ROUTE pour lister les fichiers dans le dossier /uploads
 router.get('/uploads-list', authMiddleware, (req, res) => {
   fs.readdir(uploadDir, (err, files) => {
     if (err) {
@@ -105,7 +105,7 @@ router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) =
         signature,
         filename: file.filename,
         userId: req.user.userId,
-        driveUrl: supabaseUrl  // renommer en storageUrl si tu préfères
+        url: supabaseUrl // ✅ enregistrer l’URL dans le champ `url`
       }
     });
 
@@ -129,7 +129,7 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
-// 🏢 GET beat par ID — ENVOIE LE FICHIER .sty LOCAL (attention, ici on suppose que le fichier local existe)
+// 🏢 GET beat par ID — fichier local (fallback)
 router.get('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
 
@@ -165,16 +165,19 @@ router.delete('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
     }
 
-    // Supprime localement si fichier local existant
+    // Supprime fichier sur Supabase
+    await deleteFileFromSupabaseStorage(beat.filename);
+
+    // Supprime localement si présent
     const filepath = path.join(uploadDir, beat.filename);
     if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
 
-    // TODO : Supprimer dans Supabase Storage aussi (à implémenter)
-
+    // Supprime en base
     await prisma.beat.delete({ where: { id: beatId } });
 
-    res.json({ message: 'Beat supprimé' });
+    res.json({ message: 'Beat supprimé avec succès' });
   } catch (err) {
+    console.error('Erreur suppression beat:', err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
   }
 });
@@ -199,15 +202,15 @@ router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
     };
 
     if (req.file) {
-      // Supprime ancien fichier local si existant
+      // Supprime ancien fichier local
       const oldFilePath = path.join(uploadDir, beat.filename);
       if (fs.existsSync(oldFilePath)) fs.unlinkSync(oldFilePath);
 
       updateData.filename = req.file.filename;
 
-      // Upload nouveau fichier sur Supabase Storage
+      // Upload nouveau fichier sur Supabase
       const supabaseUrl = await uploadFileToSupabaseStorage(req.file.path, req.file.filename);
-      updateData.driveUrl = supabaseUrl;
+      updateData.url = supabaseUrl; // ✅ mise à jour du champ url
 
       // Supprime fichier local temporaire
       fs.unlinkSync(req.file.path);
