@@ -141,7 +141,7 @@ router.post('/play-section', async (req, res) => {
     }
 
     // 3) Conversion MIDI → WAV avec SoundFont local
-    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -c ${TIMIDITY_CFG} -soundfont "${SF2_PATH}"`;
+    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -c ${TIMIDITY_CFG} -soundfont "${SF2_PATH}"`;
 
     console.log('🎶 Conversion TiMidity++ :', convertCmd);
     execSync(convertCmd, { stdio: 'inherit' });
