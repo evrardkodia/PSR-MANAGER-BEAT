@@ -12,6 +12,7 @@ console.log("🚀 routes/player.js chargé");
 
 // Chemins
 const TIMIDITY_EXE = 'timidity'; // Linux: binaire dans le PATH
+const 
 const TIMIDITY_CFG = '/app/timidity.cfg'; // Ton fichier cfg à la racine du projet sur Render
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
@@ -141,7 +142,8 @@ router.post('/play-section', async (req, res) => {
     }
 
     // 3) Conversion MIDI → WAV avec SoundFont local
-    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -s 44100 -c ${TIMIDITY_CFG} -EFreverb=0 -EFchorus=0 -A120 -soundfont "${SF2_PATH}"`;
+    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -c ${TIMIDITY_CFG} -soundfont "${SF2_PATH}"`;
+
     console.log('🎶 Conversion TiMidity++ :', convertCmd);
     execSync(convertCmd, { stdio: 'inherit' });
 
