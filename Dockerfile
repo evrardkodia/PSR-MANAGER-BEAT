@@ -33,6 +33,10 @@ RUN npx prisma generate
 # Installer les dépendances Python
 RUN pip3 install --no-cache-dir -r requirements.txt
 
+# --- AJOUT pour SoundFont ---
+RUN mkdir -p /app/soundfonts && \
+    curl -L -o /app/soundfonts/Yamaha_PSR.sf2 https://pub-70e217e0437d4b508fcd492d95212e77.r2.dev/Yamaha_PSR.sf2
+
 # Copier le reste du projet
 COPY . .
 
