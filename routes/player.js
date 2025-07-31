@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const fetch = require('node-fetch'); // Ajouté pour le téléchargement
 const { execSync, spawnSync } = require('child_process');
 const { PrismaClient } = require('@prisma/client');
 
@@ -18,6 +19,7 @@ const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py
 const SOX_PATH = 'sox'; // Doit être dans le PATH système
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // Route test ping simple
 router.get('/ping', (req, res) => {
@@ -57,6 +59,17 @@ function extractMidiFromSty(styPath, outputMidPath) {
   console.log(`✅ MIDI extrait : ${outputMidPath}`);
 }
 
+// Fonction utilitaire pour téléchargement du .sty depuis Supabase
+async function downloadStyFromUrl(url, destPath) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Erreur téléchargement fichier .sty : ${response.status} ${response.statusText}`);
+  }
+  const buffer = await response.buffer();
+  fs.writeFileSync(destPath, buffer);
+  console.log(`✅ Fichier .sty téléchargé depuis URL et sauvegardé : ${destPath}`);
+}
+
 // Route principale : extraction et génération audio
 router.post('/play-section', async (req, res) => {
   console.log("➡️ POST /api/player/play-section appelée");
@@ -72,16 +85,14 @@ router.post('/play-section', async (req, res) => {
     if (!beat) {
       return res.status(404).json({ error: 'Beat introuvable' });
     }
-
-    const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
-    console.log('🔍 Chemin du fichier sty :', inputStyPath);
-
-    if (!fs.existsSync(inputStyPath)) {
-      console.error('❌ Fichier .sty non trouvé sur le disque');
-      return res.status(404).json({ error: 'Fichier .sty non trouvé' });
+    if (!beat.url) {
+      return res.status(404).json({ error: 'URL du fichier .sty manquante' });
     }
 
-    console.log('✅ Fichier .sty trouvé');
+    const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
+
+    // Téléchargement obligatoire du fichier .sty depuis Supabase
+    await downloadStyFromUrl(beat.url, inputStyPath);
 
     const safeSection = section.replace(/\s+/g, '_');
     const rawMidPath = path.join(TEMP_DIR, `${beat.id}_${safeSection}_raw.mid`);
@@ -96,7 +107,7 @@ router.post('/play-section', async (req, res) => {
 
     // 2) Extraction section spécifique via Python
     const extractProcess = spawnSync('python', [PY_EXTRACT_SCRIPT, rawMidPath, extractedMidPath, section], { encoding: 'utf-8' });
-    
+
     console.log('Python stdout:', extractProcess.stdout);
     console.error('Python stderr:', extractProcess.stderr);
 
@@ -134,6 +145,7 @@ router.post('/play-section', async (req, res) => {
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Content-Disposition', `inline; filename="${beat.title}_${section}.wav"`);
     res.sendFile(wavPath);
+
   } catch (err) {
     console.error('❌ Erreur serveur :', err);
     res.status(500).json({ error: 'Erreur serveur interne' });
