@@ -21,7 +21,6 @@ __pycache__/
 *.wav
 *.mp3
 *.mid
-*.sty
 # *.sf2  # Commenté pour ne pas ignorer les fichiers .sf2
 
 # ⛔ Ne pas ignorer le dossier uploads
