@@ -150,9 +150,8 @@ router.post('/play-section', async (req, res) => {
       '-Ow',
       '-o', wavPath,
       '-s44100',
-      '-EFreverb=0',
-      '-EFchorus=0',
-      '-A120'
+      '-A120'  // volume à 120%
+      // reverb et chorus retirés volontairement
     ];
 
     console.log('🎶 Conversion TiMidity++ :', TIMIDITY_EXE, args.join(' '));
