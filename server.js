@@ -64,7 +64,7 @@ app.use('/api/player', playerRoutes);
 app.use('/static', express.static(path.join(__dirname, 'static')));
 app.use('/soundfonts', express.static(path.join(__dirname, 'soundfonts')));
 
-// ✅ Dossiers auto-créés
+// ✅ Dossiers auto-créés au démarrage
 ['uploads', 'temp'].forEach((dir) => {
   const fullPath = path.join(__dirname, dir);
   if (!fs.existsSync(fullPath)) {
@@ -81,7 +81,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Erreur serveur interne' });
 });
 
-// ✅ Lancement
+// ✅ Lancement du serveur
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   const now = new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Abidjan' });
