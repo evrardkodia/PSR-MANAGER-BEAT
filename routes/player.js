@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const fetch = require('node-fetch');
-const { execSync, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 const { PrismaClient } = require('@prisma/client');
 
 const router = express.Router();
@@ -143,45 +143,55 @@ router.post('/play-section', async (req, res) => {
       console.warn(`⚠️ Fichier timidity.cfg manquant à ${TIMIDITY_CFG}`);
     }
 
-    const convertCmd = `${TIMIDITY_EXE} -v -c "${TIMIDITY_CFG}" "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -EFreverb=0 -EFchorus=0 -A120 > "${LOG_PATH}" 2>&1`;
-    console.log('🎶 Conversion TiMidity++ :', convertCmd);
+    const args = [
+      '-v',
+      '-c', TIMIDITY_CFG,
+      extractedMidPath,
+      '-Ow',
+      '-o', wavPath,
+      '-s44100',
+      '-EFreverb=0',
+      '-EFchorus=0',
+      '-A120'
+    ];
 
-    try {
-      execSync(convertCmd, { encoding: 'utf-8' });
-      const logContent = fs.readFileSync(LOG_PATH, 'utf-8');
-      console.log('📄 TiMidity verbose log:\n', logContent);
-    } catch (e) {
-      console.error('❌ Erreur TiMidity :', e.message);
-      if (fs.existsSync(LOG_PATH)) {
-        const logContent = fs.readFileSync(LOG_PATH, 'utf-8');
-        console.error('📄 TiMidity verbose log (error case):\n', logContent);
-      }
+    console.log('🎶 Conversion TiMidity++ :', TIMIDITY_EXE, args.join(' '));
+
+    const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
+
+    // Écriture du log dans le fichier
+    fs.writeFileSync(LOG_PATH, convertProcess.stdout + convertProcess.stderr);
+
+    console.log('📄 TiMidity stdout:\n', convertProcess.stdout);
+    console.error('📄 TiMidity stderr:\n', convertProcess.stderr);
+
+    if (convertProcess.error) {
+      console.error('❌ Erreur TiMidity spawnSync:', convertProcess.error);
+      return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
+    }
+    if (convertProcess.status !== 0) {
+      console.error('❌ TiMidity a quitté avec le code:', convertProcess.status);
       return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
     }
 
-    // Suppression du silence supprimée (plus besoin de sox)
-
-    if (!fs.existsSync(wavPath)) {
-      return res.status(500).json({ error: 'WAV final manquant' });
+    // Vérification post-conversion WAV
+    if (fs.existsSync(wavPath)) {
+      const wavStats = fs.statSync(wavPath);
+      console.log(`✅ WAV généré avec succès : ${wavPath}`);
+      console.log(`🔊 Taille du fichier WAV : ${wavStats.size} octets`);
+      console.log(`📀 SoundFont utilisé : ${SF2_PATH}`);
+      console.log(`⚙️ Fichier config utilisé : ${TIMIDITY_CFG}`);
+    } else {
+      console.error(`❌ WAV NON généré : ${wavPath}`);
+      console.error(`📀 SoundFont supposé utilisé : ${SF2_PATH}`);
+      console.error(`⚙️ timidity.cfg utilisé : ${TIMIDITY_CFG}`);
+      return res.status(500).json({ error: 'WAV final manquant après conversion' });
     }
 
     // 4) Envoi au client
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Content-Disposition', `inline; filename="${beat.title}_${section}.wav"`);
     res.sendFile(wavPath);
-    
-// Vérification post-conversion WAV
-if (fs.existsSync(wavPath)) {
-  const wavStats = fs.statSync(wavPath);
-  console.log(`✅ WAV généré avec succès : ${wavPath}`);
-  console.log(`🔊 Taille du fichier WAV : ${wavStats.size} octets`);
-  console.log(`📀 SoundFont utilisé : ${SF2_PATH}`);
-  console.log(`⚙️ Fichier config utilisé : ${TIMIDITY_CFG}`);
-} else {
-  console.error(`❌ WAV NON généré : ${wavPath}`);
-  console.error(`📀 SoundFont supposé utilisé : ${SF2_PATH}`);
-  console.error(`⚙️ timidity.cfg utilisé : ${TIMIDITY_CFG}`);
-}
 
   } catch (err) {
     console.error('❌ Erreur serveur :', err);
