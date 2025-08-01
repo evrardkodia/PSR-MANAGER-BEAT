@@ -16,7 +16,6 @@ const TIMIDITY_CFG = '/app/timidity.cfg'; // fichier cfg sur Render (doit conten
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py');
-const SOX_PATH = 'sox'; // Doit être dans le PATH système
 
 // Chemin SoundFont récupéré depuis variable d'environnement SF2_PATH ou fallback
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
@@ -46,26 +45,6 @@ router.get('/ping', (req, res) => {
   console.log("➡️ GET /api/player/ping reçu");
   res.json({ message: 'pong' });
 });
-
-// Suppression du silence final
-function trimSilenceFromWav(wavPath) {
-  const trimmedPath = wavPath.replace('.wav', '_trimmed.wav');
-  try {
-    const cmd = `${SOX_PATH} "${wavPath}" "${trimmedPath}" reverse silence 1 0.1 0.1% reverse`;
-    console.log(`✂️ Suppression silence : ${cmd}`);
-    execSync(cmd, { stdio: 'inherit' });
-
-    if (fs.existsSync(trimmedPath)) {
-      fs.unlinkSync(wavPath);
-      fs.renameSync(trimmedPath, wavPath);
-      console.log(`✅ Silence supprimé : ${wavPath}`);
-    } else {
-      console.warn('⚠️ Fichier trimmed non trouvé, on garde le WAV original');
-    }
-  } catch (err) {
-    console.error('❌ Erreur suppression du silence :', err.message);
-  }
-}
 
 // Extraction brute du MIDI depuis un .sty
 function extractMidiFromSty(styPath, outputMidPath) {
@@ -180,14 +159,13 @@ router.post('/play-section', async (req, res) => {
       return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
     }
 
-    // 4) Suppression du silence
-    trimSilenceFromWav(wavPath);
+    // Suppression du silence supprimée (plus besoin de sox)
 
     if (!fs.existsSync(wavPath)) {
       return res.status(500).json({ error: 'WAV final manquant' });
     }
 
-    // 5) Envoi au client
+    // 4) Envoi au client
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Content-Disposition', `inline; filename="${beat.title}_${section}.wav"`);
     res.sendFile(wavPath);
