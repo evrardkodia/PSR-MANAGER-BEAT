@@ -23,7 +23,6 @@ const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts'
 console.log('📀 Utilisation du SoundFont :', SF2_PATH);
 
 // --- AJOUTS POUR DEBUG SOUND FONT ET CFG ---
-
 try {
   const sf2Stats = fs.statSync(SF2_PATH);
   console.log(`✅ SoundFont SF2 détecté : ${SF2_PATH} (${sf2Stats.size} octets)`);
@@ -80,7 +79,7 @@ function extractMidiFromSty(styPath, outputMidPath) {
   console.log(`✅ MIDI extrait : ${outputMidPath}`);
 }
 
-// Téléchargement du .sty depuis Supabase
+// Téléchargement du .sty depuis URL (ex: Supabase)
 async function downloadStyFromUrl(url, destPath) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -135,7 +134,6 @@ router.post('/play-section', async (req, res) => {
     console.log('Extract process status:', extractProcess.status);
 
     if (extractProcess.status !== 0) {
-      // Tenter de lire un fichier de debug python si existant
       const debugLogPath = path.join(TEMP_DIR, 'python_debug.log');
       if (fs.existsSync(debugLogPath)) {
         const debugLog = fs.readFileSync(debugLogPath, 'utf-8');
@@ -149,7 +147,6 @@ router.post('/play-section', async (req, res) => {
     const midiDuration = parseFloat(durationStr);
     console.log(`🎯 MIDI section extraite (${section}) | Durée : ${midiDuration}s`);
 
-    // Diagnostic : liste fichiers dans temp après extraction Python
     try {
       const files = fs.readdirSync(TEMP_DIR);
       console.log('🔎 Contenu de temp après extraction Python:', files);
@@ -157,7 +154,9 @@ router.post('/play-section', async (req, res) => {
       console.error('❌ Erreur lecture dossier temp:', err);
     }
 
-    // 3) Conversion MIDI → WAV avec SoundFont local
+    // 3) Conversion MIDI → WAV avec SoundFont local et log verbose
+    const LOG_PATH = path.join(TEMP_DIR, 'timidity_verbose.log');
+
     if (!fs.existsSync(SF2_PATH)) {
       console.warn(`⚠️ SoundFont non trouvé à ${SF2_PATH}`);
     }
@@ -165,16 +164,19 @@ router.post('/play-section', async (req, res) => {
       console.warn(`⚠️ Fichier timidity.cfg manquant à ${TIMIDITY_CFG}`);
     }
 
-    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -EFreverb=0 -EFchorus=0 -A120 -c "${TIMIDITY_CFG}"`;
+    const convertCmd = `${TIMIDITY_EXE} -v -c "${TIMIDITY_CFG}" "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -EFreverb=0 -EFchorus=0 -A120 > "${LOG_PATH}" 2>&1`;
     console.log('🎶 Conversion TiMidity++ :', convertCmd);
 
     try {
-      const convertOutput = execSync(convertCmd, { encoding: 'utf-8' });
-      console.log('TiMidity stdout:\n', convertOutput);
+      execSync(convertCmd, { encoding: 'utf-8' });
+      const logContent = fs.readFileSync(LOG_PATH, 'utf-8');
+      console.log('📄 TiMidity verbose log:\n', logContent);
     } catch (e) {
       console.error('❌ Erreur TiMidity :', e.message);
-      if (e.stdout) console.log('TiMidity stdout:', e.stdout);
-      if (e.stderr) console.error('TiMidity stderr:', e.stderr);
+      if (fs.existsSync(LOG_PATH)) {
+        const logContent = fs.readFileSync(LOG_PATH, 'utf-8');
+        console.error('📄 TiMidity verbose log (error case):\n', logContent);
+      }
       return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
     }
 
