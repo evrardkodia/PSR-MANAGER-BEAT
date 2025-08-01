@@ -169,6 +169,19 @@ router.post('/play-section', async (req, res) => {
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Content-Disposition', `inline; filename="${beat.title}_${section}.wav"`);
     res.sendFile(wavPath);
+    
+// Vérification post-conversion WAV
+if (fs.existsSync(wavPath)) {
+  const wavStats = fs.statSync(wavPath);
+  console.log(`✅ WAV généré avec succès : ${wavPath}`);
+  console.log(`🔊 Taille du fichier WAV : ${wavStats.size} octets`);
+  console.log(`📀 SoundFont utilisé : ${SF2_PATH}`);
+  console.log(`⚙️ Fichier config utilisé : ${TIMIDITY_CFG}`);
+} else {
+  console.error(`❌ WAV NON généré : ${wavPath}`);
+  console.error(`📀 SoundFont supposé utilisé : ${SF2_PATH}`);
+  console.error(`⚙️ timidity.cfg utilisé : ${TIMIDITY_CFG}`);
+}
 
   } catch (err) {
     console.error('❌ Erreur serveur :', err);
