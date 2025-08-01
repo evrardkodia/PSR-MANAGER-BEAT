@@ -22,6 +22,23 @@ const SOX_PATH = 'sox'; // Doit être dans le PATH système
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
 console.log('📀 Utilisation du SoundFont :', SF2_PATH);
 
+// --- AJOUTS POUR DEBUG SOUND FONT ET CFG ---
+
+try {
+  const sf2Stats = fs.statSync(SF2_PATH);
+  console.log(`✅ SoundFont SF2 détecté : ${SF2_PATH} (${sf2Stats.size} octets)`);
+} catch (e) {
+  console.error(`❌ SoundFont SF2 INTRouvable ou inaccessible : ${SF2_PATH}`, e.message);
+}
+
+try {
+  const cfgContent = fs.readFileSync(TIMIDITY_CFG, 'utf-8');
+  console.log(`📄 Contenu de ${TIMIDITY_CFG} :\n${cfgContent}`);
+} catch (e) {
+  console.error(`❌ Impossible de lire le fichier timidity.cfg : ${e.message}`);
+}
+// --- FIN AJOUT DEBUG ---
+
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -150,7 +167,16 @@ router.post('/play-section', async (req, res) => {
 
     const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -c "${TIMIDITY_CFG}"`;
     console.log('🎶 Conversion TiMidity++ :', convertCmd);
-    execSync(convertCmd, { stdio: 'inherit' });
+
+    try {
+      const convertOutput = execSync(convertCmd, { encoding: 'utf-8' });
+      console.log('TiMidity stdout:\n', convertOutput);
+    } catch (e) {
+      console.error('❌ Erreur TiMidity :', e.message);
+      if (e.stdout) console.log('TiMidity stdout:', e.stdout);
+      if (e.stderr) console.error('TiMidity stderr:', e.stderr);
+      return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
+    }
 
     // 4) Suppression du silence
     trimSilenceFromWav(wavPath);
