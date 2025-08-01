@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Mise à jour et installation de timidity
+# Mise à jour et installation de timidity et sox
 apt-get update
-apt-get install -y timidity
+apt-get install -y timidity sox
 
 # Télécharger le SoundFont Yamaha_PSR.sf2
 mkdir -p /app/soundfonts
