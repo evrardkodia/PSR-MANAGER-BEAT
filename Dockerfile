@@ -2,13 +2,14 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Installer les dépendances système
+# Installer les dépendances système, dont fluidsynth
 RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
     python3 \
     python3-pip \
     timidity \
+    fluidsynth \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

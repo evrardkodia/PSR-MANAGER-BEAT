@@ -11,8 +11,7 @@ const prisma = new PrismaClient();
 console.log("🚀 routes/player.js chargé");
 
 // Chemins
-const TIMIDITY_EXE = 'timidity'; // Linux: binaire dans le PATH
-const TIMIDITY_CFG = '/app/timidity.cfg'; // fichier cfg sur Render (doit contenir la ligne soundfont /app/soundfonts/Yamaha_PSR.sf2)
+const FLUIDSYNTH_EXE = 'fluidsynth'; // FluidSynth doit être installé et accessible dans le PATH
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py');
@@ -20,22 +19,6 @@ const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py
 // Chemin SoundFont récupéré depuis variable d'environnement SF2_PATH ou fallback
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
 console.log('📀 Utilisation du SoundFont :', SF2_PATH);
-
-// --- AJOUTS POUR DEBUG SOUND FONT ET CFG ---
-try {
-  const sf2Stats = fs.statSync(SF2_PATH);
-  console.log(`✅ SoundFont SF2 détecté : ${SF2_PATH} (${sf2Stats.size} octets)`);
-} catch (e) {
-  console.error(`❌ SoundFont SF2 INTRouvable ou inaccessible : ${SF2_PATH}`, e.message);
-}
-
-try {
-  const cfgContent = fs.readFileSync(TIMIDITY_CFG, 'utf-8');
-  console.log(`📄 Contenu de ${TIMIDITY_CFG} :\n${cfgContent}`);
-} catch (e) {
-  console.error(`❌ Impossible de lire le fichier timidity.cfg : ${e.message}`);
-}
-// --- FIN AJOUT DEBUG ---
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -69,7 +52,7 @@ async function downloadStyFromUrl(url, destPath) {
   console.log(`✅ Fichier .sty téléchargé depuis URL et sauvegardé : ${destPath}`);
 }
 
-// Route principale : extraction et génération audio
+// Route principale : extraction et génération audio avec FluidSynth
 router.post('/play-section', async (req, res) => {
   console.log("➡️ POST /api/player/play-section appelée");
   const { beatId, section } = req.body;
@@ -121,55 +104,31 @@ router.post('/play-section', async (req, res) => {
       return res.status(500).json({ error: `Échec extraction section ${section}` });
     }
 
-    const outputLines = extractProcess.stdout.trim().split('\n');
-    const durationStr = outputLines[outputLines.length - 1];
-    const midiDuration = parseFloat(durationStr);
-    console.log(`🎯 MIDI section extraite (${section}) | Durée : ${midiDuration}s`);
-
-    try {
-      const files = fs.readdirSync(TEMP_DIR);
-      console.log('🔎 Contenu de temp après extraction Python:', files);
-    } catch (err) {
-      console.error('❌ Erreur lecture dossier temp:', err);
-    }
-
-    // 3) Conversion MIDI → WAV avec SoundFont local et log verbose
-    const LOG_PATH = path.join(TEMP_DIR, 'timidity_verbose.log');
-
+    // 3) Conversion MIDI → WAV avec FluidSynth
     if (!fs.existsSync(SF2_PATH)) {
       console.warn(`⚠️ SoundFont non trouvé à ${SF2_PATH}`);
     }
-    if (!fs.existsSync(TIMIDITY_CFG)) {
-      console.warn(`⚠️ Fichier timidity.cfg manquant à ${TIMIDITY_CFG}`);
-    }
 
     const args = [
-      '-v',
-      '-c', TIMIDITY_CFG,
-      extractedMidPath,
-      '-Ow',
-      '-o', wavPath,
-      '-s44100',
-      '-A120'  // volume à 120%
-      // reverb et chorus retirés volontairement
+      '-F', wavPath,    // fichier WAV de sortie
+      '-T', 'wav',     // format de sortie
+      SF2_PATH,        // SoundFont
+      extractedMidPath  // fichier MIDI d'entrée
     ];
 
-    console.log('🎶 Conversion TiMidity++ :', TIMIDITY_EXE, args.join(' '));
+    console.log('🎶 Conversion FluidSynth :', FLUIDSYNTH_EXE, args.join(' '));
 
-    const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
+    const convertProcess = spawnSync(FLUIDSYNTH_EXE, args, { encoding: 'utf-8' });
 
-    // Écriture du log dans le fichier
-    fs.writeFileSync(LOG_PATH, convertProcess.stdout + convertProcess.stderr);
-
-    console.log('📄 TiMidity stdout:\n', convertProcess.stdout);
-    console.error('📄 TiMidity stderr:\n', convertProcess.stderr);
+    console.log('📄 FluidSynth stdout:\n', convertProcess.stdout);
+    console.error('📄 FluidSynth stderr:\n', convertProcess.stderr);
 
     if (convertProcess.error) {
-      console.error('❌ Erreur TiMidity spawnSync:', convertProcess.error);
+      console.error('❌ Erreur FluidSynth spawnSync:', convertProcess.error);
       return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
     }
     if (convertProcess.status !== 0) {
-      console.error('❌ TiMidity a quitté avec le code:', convertProcess.status);
+      console.error('❌ FluidSynth a quitté avec le code:', convertProcess.status);
       return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
     }
 
@@ -179,11 +138,8 @@ router.post('/play-section', async (req, res) => {
       console.log(`✅ WAV généré avec succès : ${wavPath}`);
       console.log(`🔊 Taille du fichier WAV : ${wavStats.size} octets`);
       console.log(`📀 SoundFont utilisé : ${SF2_PATH}`);
-      console.log(`⚙️ Fichier config utilisé : ${TIMIDITY_CFG}`);
     } else {
       console.error(`❌ WAV NON généré : ${wavPath}`);
-      console.error(`📀 SoundFont supposé utilisé : ${SF2_PATH}`);
-      console.error(`⚙️ timidity.cfg utilisé : ${TIMIDITY_CFG}`);
       return res.status(500).json({ error: 'WAV final manquant après conversion' });
     }
 
