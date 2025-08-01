@@ -12,7 +12,7 @@ console.log("🚀 routes/player.js chargé");
 
 // Chemins
 const TIMIDITY_EXE = 'timidity'; // Linux: binaire dans le PATH
-const TIMIDITY_CFG = '/app/timidity.cfg'; // Ton fichier cfg à la racine du projet sur Render
+const TIMIDITY_CFG = '/app/timidity.cfg'; // fichier cfg sur Render (doit contenir la ligne soundfont /app/soundfonts/Yamaha_PSR.sf2)
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py');
@@ -141,8 +141,14 @@ router.post('/play-section', async (req, res) => {
     }
 
     // 3) Conversion MIDI → WAV avec SoundFont local
-const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -c ${TIMIDITY_CFG}`;
+    if (!fs.existsSync(SF2_PATH)) {
+      console.warn(`⚠️ SoundFont non trouvé à ${SF2_PATH}`);
+    }
+    if (!fs.existsSync(TIMIDITY_CFG)) {
+      console.warn(`⚠️ Fichier timidity.cfg manquant à ${TIMIDITY_CFG}`);
+    }
 
+    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -c "${TIMIDITY_CFG}"`;
     console.log('🎶 Conversion TiMidity++ :', convertCmd);
     execSync(convertCmd, { stdio: 'inherit' });
 
