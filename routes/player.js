@@ -165,7 +165,7 @@ router.post('/play-section', async (req, res) => {
       console.warn(`⚠️ Fichier timidity.cfg manquant à ${TIMIDITY_CFG}`);
     }
 
-    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -c "${TIMIDITY_CFG}"`;
+    const convertCmd = `${TIMIDITY_EXE} "${extractedMidPath}" -Ow -o "${wavPath}" -s44100 -EFreverb=0 -EFchorus=0 -A120 -c "${TIMIDITY_CFG}"`;
     console.log('🎶 Conversion TiMidity++ :', convertCmd);
 
     try {
