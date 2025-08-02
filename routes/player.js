@@ -108,18 +108,15 @@ router.post('/play-section', async (req, res) => {
     if (!fs.existsSync(SF2_PATH)) {
       console.warn(`⚠️ SoundFont non trouvé à ${SF2_PATH}`);
     }
-
-   const args = [
-  '-F', wavPath,               // Fichier WAV de sortie
-  '-T', 'wav',                 // Format de sortie
-  '-g', '1.0',                 // Gain à 100%
-  '--chorus=yes',             // Activer chorus
-  '--reverb=yes',             // Activer reverb
-  '-R', '1',                   // Reverb activée
-  '-C', '1',                   // Chorus activé
-  '-O', 's16',                 // Format audio 16-bit signé
-  '-o', 'synth.interpolation=4', // Interpolation sinc (qualité max)
-  '-o', 'synth.parallel-render=true', // Mode rendu offline rapide
+const args = [
+  '-F', wavPath,                     // Fichier WAV de sortie
+  '-T', 'wav',                       // Format de sortie
+  '-g', '1.0',                       // Gain à 100%
+  '-R', '1',                         // Activer Reverb
+  '-C', '1',                         // Activer Chorus
+  '-O', 's16',                       // Format audio 16-bit signé
+  '-o', 'synth.interpolation=4',    // Interpolation sinc pour qualité maximale
+  '-o', 'synth.parallel-render=true', // Rendu offline optimisé
   SF2_PATH,
   extractedMidPath
 ];
