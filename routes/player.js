@@ -14,7 +14,6 @@ console.log("🚀 routes/player.js chargé");
 const TIMIDITY_EXE = 'timidity'; // Timidity doit être installé et accessible dans le PATH
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
-const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py');
 
 // Chemin SoundFont récupéré depuis variable d'environnement SF2_PATH ou fallback
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
@@ -55,14 +54,13 @@ async function downloadStyFromUrl(url, destPath) {
   console.log(`✅ Fichier .sty téléchargé depuis URL et sauvegardé : ${destPath}`);
 }
 
-// Route principale : extraction et génération audio avec Timidity
-router.post('/play-section', async (req, res) => {
-  console.log("➡️ POST /api/player/play-section appelée");
-  const { beatId, section } = req.body;
-  console.log('📥 Requête reçue :', { beatId, section });
+// Route principale : extraction et génération audio complète sans extraction de section
+router.post('/play-full', async (req, res) => {
+  console.log("➡️ POST /api/player/play-full appelée");
+  const { beatId } = req.body;
 
-  if (!beatId || !section) {
-    return res.status(400).json({ error: 'beatId et section sont requis' });
+  if (!beatId) {
+    return res.status(400).json({ error: 'beatId est requis' });
   }
 
   try {
@@ -79,52 +77,25 @@ router.post('/play-section', async (req, res) => {
     // Téléchargement du fichier .sty
     await downloadStyFromUrl(beat.url, inputStyPath);
 
-    const safeSection = section.replace(/\s+/g, '_');
-    const rawMidPath = path.join(TEMP_DIR, `${beat.id}_${safeSection}_raw.mid`);
-    const extractedMidPath = path.join(TEMP_DIR, `${beat.id}_${safeSection}.mid`);
-    const wavPath = path.join(TEMP_DIR, `${beat.id}_${safeSection}.wav`);
+    const rawMidPath = path.join(TEMP_DIR, `${beat.id}_full_raw.mid`);
+    const wavPath = path.join(TEMP_DIR, `${beat.id}_full.wav`);
 
-    // 1) Extraction MIDI brut
+    // Extraction MIDI brut complet
     extractMidiFromSty(inputStyPath, rawMidPath);
+
     if (!fs.existsSync(rawMidPath)) {
       return res.status(500).json({ error: 'MIDI brut manquant après extraction' });
     }
 
-    // 2) Extraction section via script Python
-    const extractProcess = spawnSync('python3', [PY_EXTRACT_SCRIPT, rawMidPath, extractedMidPath, section], { encoding: 'utf-8' });
-
-    console.log('Python stdout:', extractProcess.stdout || 'empty stdout');
-    console.error('Python stderr:', extractProcess.stderr || 'empty stderr');
-    console.log('Extract process error:', extractProcess.error || 'none');
-    console.log('Extract process status:', extractProcess.status);
-
-    if (extractProcess.status !== 0) {
-      const debugLogPath = path.join(TEMP_DIR, 'python_debug.log');
-      if (fs.existsSync(debugLogPath)) {
-        const debugLog = fs.readFileSync(debugLogPath, 'utf-8');
-        console.error('Contenu python_debug.log:', debugLog);
-      }
-      return res.status(500).json({ error: `Échec extraction section ${section}` });
-    }
-
-    // 3) Conversion MIDI → WAV avec Timidity
-    if (!fs.existsSync(TIMIDITY_CFG_PATH)) {
-      console.warn(`⚠️ timidity.cfg non trouvé à ${TIMIDITY_CFG_PATH}`);
-    }
-    if (!fs.existsSync(SF2_PATH)) {
-      console.warn(`⚠️ SoundFont non trouvé à ${SF2_PATH}`);
-    }
-
-    // Utilisation du fichier timidity.cfg fixe, on utilise -Ow -o pour générer WAV
+    // Conversion MIDI complet → WAV avec Timidity
     const args = [
       '-c', TIMIDITY_CFG_PATH,
       '-Ow',
       '-o', wavPath,
-      extractedMidPath
+      rawMidPath
     ];
 
-    console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, args.join(' '));
-
+    console.log('🎶 Conversion Timidity (full) :', TIMIDITY_EXE, args.join(' '));
     const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
 
     console.log('📄 Timidity stdout:\n', convertProcess.stdout);
@@ -139,24 +110,17 @@ router.post('/play-section', async (req, res) => {
       return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
     }
 
-    // Vérification post-conversion WAV
-    if (fs.existsSync(wavPath)) {
-      const wavStats = fs.statSync(wavPath);
-      console.log(`✅ WAV généré avec succès : ${wavPath}`);
-      console.log(`🔊 Taille du fichier WAV : ${wavStats.size} octets`);
-      console.log(`📀 SoundFont utilisé : ${SF2_PATH}`);
-    } else {
-      console.error(`❌ WAV NON généré : ${wavPath}`);
+    if (!fs.existsSync(wavPath)) {
       return res.status(500).json({ error: 'WAV final manquant après conversion' });
     }
 
-    // 4) Envoi au client
+    // Envoi du WAV complet au client
     res.setHeader('Content-Type', 'audio/wav');
-    res.setHeader('Content-Disposition', `inline; filename="${beat.title}_${section}.wav"`);
+    res.setHeader('Content-Disposition', `inline; filename="${beat.title}_full.wav"`);
     res.sendFile(wavPath);
 
   } catch (err) {
-    console.error('❌ Erreur serveur :', err);
+    console.error('❌ Erreur serveur (play-full) :', err);
     res.status(500).json({ error: 'Erreur serveur interne' });
   }
 });
@@ -164,17 +128,15 @@ router.post('/play-section', async (req, res) => {
 // Nettoyage des fichiers temporaires
 router.post('/cleanup', async (req, res) => {
   console.log("➡️ POST /api/player/cleanup appelée");
-  const { beatId, section } = req.body;
+  const { beatId } = req.body;
 
-  if (!beatId || !section) {
-    return res.status(400).json({ error: 'beatId et section sont requis' });
+  if (!beatId) {
+    return res.status(400).json({ error: 'beatId est requis' });
   }
 
-  const safeSection = section.replace(/\s+/g, '_');
   const filesToDelete = [
-    path.join(TEMP_DIR, `${beatId}_${safeSection}_raw.mid`),
-    path.join(TEMP_DIR, `${beatId}_${safeSection}.mid`),
-    path.join(TEMP_DIR, `${beatId}_${safeSection}.wav`),
+    path.join(TEMP_DIR, `${beatId}_full_raw.mid`),
+    path.join(TEMP_DIR, `${beatId}_full.wav`),
   ];
 
   try {
@@ -183,7 +145,7 @@ router.post('/cleanup', async (req, res) => {
         fs.unlinkSync(filePath);
       }
     });
-    console.log(`🧹 Fichiers supprimés pour beatId=${beatId}, section=${section}`);
+    console.log(`🧹 Fichiers supprimés pour beatId=${beatId}`);
     res.status(200).json({ message: 'Fichiers supprimés' });
   } catch (err) {
     console.warn('⚠️ Problème lors du nettoyage :', err.message);
