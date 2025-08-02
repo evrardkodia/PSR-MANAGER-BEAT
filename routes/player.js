@@ -20,6 +20,9 @@ const PY_EXTRACT_SCRIPT = path.join(__dirname, '..', 'scripts', 'extract_main.py
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
 console.log('📀 Utilisation du SoundFont :', SF2_PATH);
 
+// Chemin fixe du timidity.cfg à la racine (non créé dynamiquement)
+const TIMIDITY_CFG_PATH = path.join(__dirname, '..', 'timidity.cfg');
+
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -105,22 +108,18 @@ router.post('/play-section', async (req, res) => {
     }
 
     // 3) Conversion MIDI → WAV avec Timidity
+    if (!fs.existsSync(TIMIDITY_CFG_PATH)) {
+      console.warn(`⚠️ timidity.cfg non trouvé à ${TIMIDITY_CFG_PATH}`);
+    }
     if (!fs.existsSync(SF2_PATH)) {
       console.warn(`⚠️ SoundFont non trouvé à ${SF2_PATH}`);
     }
 
-    // On écrit un fichier de config timidity.cfg temporaire pour forcer l'utilisation du soundfont
-    const timidityConfigPath = path.join(TEMP_DIR, 'timidity.cfg');
-    const timidityConfigContent = `
-soundfont ${SF2_PATH}
-source raw
-output wav ${wavPath}
-`;
-    fs.writeFileSync(timidityConfigPath, timidityConfigContent);
-    console.log(`✅ timidity.cfg généré : ${timidityConfigPath}`);
-
+    // Utilisation du fichier timidity.cfg fixe, on utilise -Ow -o pour générer WAV
     const args = [
-      '-c', timidityConfigPath,
+      '-c', TIMIDITY_CFG_PATH,
+      '-Ow',
+      '-o', wavPath,
       extractedMidPath
     ];
 

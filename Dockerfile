@@ -21,11 +21,7 @@ RUN apt-get update && apt-get install -y \
     libfftw3-dev \
     ca-certificates
 
-# 🔥 Supprimer Timidity s'il est déjà installé
-RUN apt remove --purge -y timidity timidity-daemon || true && \
-    apt autoremove -y
-
-# ✅ Réinstallation propre de Timidity
+# ✅ Installation de Timidity (sans suppression préalable)
 RUN apt update && \
     apt install -y timidity timidity-interfaces-extra && \
     timidity --version
