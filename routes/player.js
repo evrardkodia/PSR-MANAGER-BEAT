@@ -109,17 +109,17 @@ router.post('/play-section', async (req, res) => {
       console.warn(`⚠️ SoundFont non trouvé à ${SF2_PATH}`);
     }
 const args = [
-  '-F', wavPath,                     // Fichier WAV de sortie
-  '-T', 'wav',                       // Format de sortie
-  '-g', '1.0',                       // Gain à 100%
-  '-R', '1',                         // Activer Reverb
-  '-C', '1',                         // Activer Chorus
-  '-O', 's16',                       // Format audio 16-bit signé
-  '-o', 'synth.interpolation=4',    // Interpolation sinc pour qualité maximale
-  '-o', 'synth.parallel-render=true', // Rendu offline optimisé
+  '-F', wavPath,
+  '-T', 'wav',
+  '-g', '1.0',
+  '-R', '1',
+  '-C', '1',
+  '-O', 's16',
+  '-f', '/app/fluidsynth.config',  // ✅ chemin stable et versionné
   SF2_PATH,
   extractedMidPath
 ];
+
 
 
     console.log('🎶 Conversion FluidSynth :', FLUIDSYNTH_EXE, args.join(' '));
