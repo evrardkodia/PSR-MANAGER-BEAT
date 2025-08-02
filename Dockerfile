@@ -19,8 +19,19 @@ RUN apt-get update && apt-get install -y \
     libpulse-dev \
     libreadline-dev \
     libfftw3-dev \
-    ca-certificates && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    ca-certificates
+
+# 🔥 Supprimer Timidity s'il est déjà installé
+RUN apt remove --purge -y timidity timidity-daemon || true && \
+    apt autoremove -y
+
+# ✅ Réinstallation propre de Timidity
+RUN apt update && \
+    apt install -y timidity timidity-interfaces-extra && \
+    timidity --version
+
+# Nettoyage
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Installer Node.js 18 depuis NodeSource
 RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/nodesource.gpg && \
@@ -42,8 +53,8 @@ RUN git clone --depth 1 https://github.com/FluidSynth/fluidsynth.git /tmp/fluids
 WORKDIR /app
 
 # Copier les fichiers de configuration
-COPY package*.json ./
-COPY requirements.txt ./
+COPY package*.json ./ 
+COPY requirements.txt ./ 
 COPY prisma ./prisma
 
 # Installer les dépendances Node.js et Prisma
