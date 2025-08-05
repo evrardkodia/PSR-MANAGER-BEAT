@@ -41,19 +41,33 @@ function extractMidiFromSty(styPath, outputMidPath) {
   console.log(`✅ MIDI brut extrait : ${outputMidPath}`);
 }
 
-// Extraction main via script Python : await terminé (spawnSync)
-// Le script extract_main.py doit accepter : --input inputStyPath --output outputMidPath --mainLetter X
+// Extraction main via script Python : spawnSync avec logging complet
 function extractMainWithPython(inputStyPath, outputMidPath, mainLetter) {
   console.log(`🔧 Extraction main ${mainLetter} via extract_main.py`);
   const pyScript = path.join(SCRIPTS_DIR, 'extract_main.py');
-  const args = ['--input', inputStyPath, '--output', outputMidPath, '--mainLetter', mainLetter];
 
-  const result = spawnSync('python3', [pyScript, ...args], { encoding: 'utf-8' });
-  if (result.error) throw result.error;
+  // Arguments positionnels (ton script Python attend input, output, section_name)
+  const args = [pyScript, inputStyPath, outputMidPath, mainLetter];
+
+  const result = spawnSync('python3', args, { encoding: 'utf-8' });
+
+  if (result.error) {
+    console.error('❌ Erreur spawnSync:', result.error);
+    throw result.error;
+  }
+
+  if (result.stdout && result.stdout.trim() !== '') {
+    console.log('🐍 extract_main.py stdout:', result.stdout.trim());
+  }
+
+  if (result.stderr && result.stderr.trim() !== '') {
+    console.error('🐍 extract_main.py stderr:', result.stderr.trim());
+  }
+
   if (result.status !== 0) {
-    console.error('❌ extract_main.py stderr:', result.stderr);
     throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
   }
+
   console.log('✅ Extraction main terminée');
 }
 
@@ -72,8 +86,6 @@ function convertMidToWav(midPath, wavPath) {
 }
 
 // Route qui prépare le main (extraction + conversion WAV)
-// Frontend appelle cette route au clic sur un beat (avant lecture)
-// Renvoie { wavUrl } accessible publiquement
 router.post('/prepare-main', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-main appelée');
   const { beatId, mainLetter } = req.body;
@@ -122,7 +134,6 @@ router.post('/prepare-main', async (req, res) => {
 // Route play-section (confirm que WAV est prêt, lecture côté client)
 router.post('/play-section', (req, res) => {
   console.log('➡️ POST /api/player/play-section appelée');
-  // Pas de conversion ici, le wav est déjà prêt côté client
   res.json({ message: 'Le fichier wav est prêt, lecture côté client' });
 });
 
