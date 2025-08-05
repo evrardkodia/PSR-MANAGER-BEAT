@@ -42,12 +42,12 @@ function extractMidiFromSty(styPath, outputMidPath) {
 }
 
 // Extraction main via script Python : spawnSync avec logging complet
-function extractMainWithPython(inputStyPath, outputMidPath, mainLetter) {
-  console.log(`🔧 Extraction main ${mainLetter} via extract_main.py`);
+function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
+  console.log(`🔧 Extraction section "${sectionName}" via extract_main.py`);
   const pyScript = path.join(SCRIPTS_DIR, 'extract_main.py');
 
-  // Arguments positionnels (ton script Python attend input, output, section_name)
-  const args = [pyScript, inputStyPath, outputMidPath, mainLetter];
+  // Arguments positionnels : input.mid output.mid section_name
+  const args = [pyScript, inputMidPath, outputMidPath, sectionName];
 
   const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
@@ -68,7 +68,7 @@ function extractMainWithPython(inputStyPath, outputMidPath, mainLetter) {
     throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
   }
 
-  console.log('✅ Extraction main terminée');
+  console.log('✅ Extraction section terminée');
 }
 
 // Conversion MIDI → WAV avec Timidity
@@ -103,18 +103,21 @@ router.post('/prepare-main', async (req, res) => {
     // Télécharger le .sty dans uploads/
     await downloadStyFromUrl(beat.url, inputStyPath);
 
-    // Chemins des fichiers temporaires
-    const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
-    const wavPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}.wav`);
+    // 1️⃣ Extraire le MIDI brut complet depuis .sty
+    const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
+    extractMidiFromSty(inputStyPath, fullMidPath);
 
-    // Extraction main via python
-    extractMainWithPython(inputStyPath, rawMidPath, mainLetter);
+    // 2️⃣ Extraire la section "Main X" du MIDI complet via Python
+    const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
+    const sectionName = `Main ${mainLetter}`; // ex: "Main A"
+    extractMainWithPython(fullMidPath, rawMidPath, sectionName);
 
     if (!fs.existsSync(rawMidPath)) {
       return res.status(500).json({ error: 'Fichier MIDI extrait manquant après extraction' });
     }
 
-    // Conversion MIDI → WAV
+    // 3️⃣ Conversion MIDI → WAV
+    const wavPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}.wav`);
     convertMidToWav(rawMidPath, wavPath);
 
     if (!fs.existsSync(wavPath)) {
