@@ -22,6 +22,17 @@ const TIMIDITY_CFG_PATH = path.join(__dirname, '..', 'timidity.cfg');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
+// --- Utils ---
+function publicBaseUrl(req) {
+  // Permet d'avoir une URL absolue, utile derrière un proxy (Render)
+  // Si tu définis PUBLIC_URL dans .env, elle est prioritaire
+  const fromEnv = process.env.PUBLIC_URL;
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
 // Téléchargement du .sty depuis URL
 async function downloadStyFromUrl(url, destPath) {
   const response = await fetch(url);
@@ -134,12 +145,50 @@ router.post('/prepare-main', async (req, res) => {
   }
 });
 
-// Route play-section (confirm que WAV est prêt, lecture côté client)
+// ✅ PLAY: vérifie le WAV et renvoie l'URL absolue exploitable par le navigateur
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;
-  console.log(`➡️ POST /api/player/play-section appelée pour beatId=${beatId} main=${mainLetter}`);
-  // Ici tu pourrais faire un log en base, analytics, etc.
-  res.json({ message: 'Lecture WAV confirmée côté serveur' });
+
+  if (!beatId || !mainLetter) {
+    return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
+  }
+
+  const fileName = `${beatId}_main_${mainLetter}.wav`;
+  const fullPath = path.join(TEMP_DIR, fileName);
+
+  console.log(`➡️ POST /api/player/play-section pour beatId=${beatId} main=${mainLetter}`);
+  console.log(`🔎 Vérification existence: ${fullPath}`);
+
+  if (!fs.existsSync(fullPath)) {
+    console.error(`❌ Fichier introuvable: ${fullPath}`);
+    return res.status(404).json({ error: 'Fichier WAV introuvable. Réessayez de préparer le main.' });
+  }
+
+  const base = publicBaseUrl(req); // ex: https://psr-manager-beat.onrender.com
+  const wavUrl = `${base}/temp/${fileName}`;
+  console.log(`✅ WAV prêt: ${wavUrl}`);
+
+  // Option: log/analytics en base ici
+
+  return res.json({ wavUrl, message: 'Lecture WAV confirmée côté serveur' });
+});
+
+// (Optionnel) 📡 STREAM DIRECT: /api/player/stream?beatId=5&mainLetter=A
+router.get('/stream', (req, res) => {
+  const { beatId, mainLetter } = req.query;
+
+  if (!beatId || !mainLetter) {
+    return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
+  }
+  const fileName = `${beatId}_main_${mainLetter}.wav`;
+  const fullPath = path.join(TEMP_DIR, fileName);
+
+  if (!fs.existsSync(fullPath)) {
+    return res.status(404).json({ error: 'Fichier WAV introuvable.' });
+  }
+
+  res.setHeader('Content-Type', 'audio/wav');
+  return res.sendFile(fullPath);
 });
 
 // Nettoyage fichiers temp (optionnel)
@@ -150,7 +199,7 @@ router.post('/cleanup', async (req, res) => {
   if (!beatId) return res.status(400).json({ error: 'beatId est requis' });
 
   // Supprime tous fichiers temp liés au beat (raw midi + wav mainX)
-  const filesToDelete = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(beatId));
+  const filesToDelete = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(String(beatId)));
 
   try {
     filesToDelete.forEach(file => {
