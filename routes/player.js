@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require('express'); 
 const path = require('path');
 const fs = require('fs');
 const fetch = require('node-fetch');
@@ -11,149 +11,145 @@ const prisma = new PrismaClient();
 console.log("🚀 routes/player.js chargé");
 
 // Chemins
-const TIMIDITY_EXE = 'timidity'; // Timidity doit être installé et accessible dans le PATH
+const TIMIDITY_EXE = 'timidity'; // timidity doit être installé et dans le PATH
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts');
 
-// Chemin SoundFont récupéré depuis variable d'environnement SF2_PATH ou fallback
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
-console.log('📀 Utilisation du SoundFont :', SF2_PATH);
-
-// Chemin fixe du timidity.cfg à la racine (non créé dynamiquement)
 const TIMIDITY_CFG_PATH = path.join(__dirname, '..', 'timidity.cfg');
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-// Route test ping simple
-router.get('/ping', (req, res) => {
-  console.log("➡️ GET /api/player/ping reçu");
-  res.json({ message: 'pong' });
-});
+// Téléchargement du .sty depuis URL
+async function downloadStyFromUrl(url, destPath) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Erreur téléchargement fichier .sty : ${response.status} ${response.statusText}`);
+  const buffer = await response.buffer();
+  fs.writeFileSync(destPath, buffer);
+  console.log(`✅ Fichier .sty téléchargé : ${destPath}`);
+}
 
-// Extraction brute du MIDI depuis un .sty
+// Extraction MIDI brut complet depuis .sty (header MThd)
 function extractMidiFromSty(styPath, outputMidPath) {
   const data = fs.readFileSync(styPath);
   const headerIndex = data.indexOf(Buffer.from('MThd'));
-  if (headerIndex === -1) {
-    throw new Error('Aucun header MIDI (MThd) trouvé dans le fichier .sty');
-  }
+  if (headerIndex === -1) throw new Error('Aucun header MIDI (MThd) trouvé dans le fichier .sty');
   const midiData = data.slice(headerIndex);
   fs.writeFileSync(outputMidPath, midiData);
-  console.log(`✅ MIDI extrait : ${outputMidPath}`);
+  console.log(`✅ MIDI brut extrait : ${outputMidPath}`);
 }
 
-// Téléchargement du .sty depuis URL (ex: Supabase)
-async function downloadStyFromUrl(url, destPath) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Erreur téléchargement fichier .sty : ${response.status} ${response.statusText}`);
+// Extraction main via script Python : await terminé (spawnSync)
+// Le script extract_main.py doit accepter : --input inputStyPath --output outputMidPath --mainLetter X
+function extractMainWithPython(inputStyPath, outputMidPath, mainLetter) {
+  console.log(`🔧 Extraction main ${mainLetter} via extract_main.py`);
+  const pyScript = path.join(SCRIPTS_DIR, 'extract_main.py');
+  const args = ['--input', inputStyPath, '--output', outputMidPath, '--mainLetter', mainLetter];
+
+  const result = spawnSync('python3', [pyScript, ...args], { encoding: 'utf-8' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    console.error('❌ extract_main.py stderr:', result.stderr);
+    throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
   }
-  const buffer = await response.buffer();
-  fs.writeFileSync(destPath, buffer);
-  console.log(`✅ Fichier .sty téléchargé depuis URL et sauvegardé : ${destPath}`);
+  console.log('✅ Extraction main terminée');
 }
 
-// Route principale : extraction et génération audio complète sans extraction de section
-router.post('/play-full', async (req, res) => {
-  console.log("➡️ POST /api/player/play-full appelée");
-  const { beatId } = req.body;
+// Conversion MIDI → WAV avec Timidity
+function convertMidToWav(midPath, wavPath) {
+  console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '-o', wavPath, midPath);
+  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '-o', wavPath, midPath];
+  const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
 
-  if (!beatId) {
-    return res.status(400).json({ error: 'beatId est requis' });
+  if (convertProcess.error) throw convertProcess.error;
+  if (convertProcess.status !== 0) {
+    console.error('❌ Timidity stderr:', convertProcess.stderr);
+    throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
   }
+  console.log('✅ Conversion MIDI → WAV terminée');
+}
+
+// Route qui prépare le main (extraction + conversion WAV)
+// Frontend appelle cette route au clic sur un beat (avant lecture)
+// Renvoie { wavUrl } accessible publiquement
+router.post('/prepare-main', async (req, res) => {
+  console.log('➡️ POST /api/player/prepare-main appelée');
+  const { beatId, mainLetter } = req.body;
+
+  if (!beatId) return res.status(400).json({ error: 'beatId est requis' });
+  if (!mainLetter) return res.status(400).json({ error: 'mainLetter est requis' });
 
   try {
     const beat = await prisma.beat.findUnique({ where: { id: beatId } });
-    if (!beat) {
-      return res.status(404).json({ error: 'Beat introuvable' });
-    }
-    if (!beat.url) {
-      return res.status(404).json({ error: 'URL du fichier .sty manquante' });
-    }
+    if (!beat) return res.status(404).json({ error: 'Beat introuvable' });
+    if (!beat.url) return res.status(404).json({ error: 'URL du fichier .sty manquante' });
 
     const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
 
-    // Téléchargement du fichier .sty
+    // Télécharger le .sty dans uploads/
     await downloadStyFromUrl(beat.url, inputStyPath);
 
-    const rawMidPath = path.join(TEMP_DIR, `${beat.id}_full_raw.mid`);
-    const wavPath = path.join(TEMP_DIR, `${beat.id}_full.wav`);
+    // Chemins des fichiers temporaires
+    const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
+    const wavPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}.wav`);
 
-    // Extraction MIDI brut complet
-    extractMidiFromSty(inputStyPath, rawMidPath);
+    // Extraction main via python
+    extractMainWithPython(inputStyPath, rawMidPath, mainLetter);
 
     if (!fs.existsSync(rawMidPath)) {
-      return res.status(500).json({ error: 'MIDI brut manquant après extraction' });
+      return res.status(500).json({ error: 'Fichier MIDI extrait manquant après extraction' });
     }
 
-    // Conversion MIDI complet → WAV avec Timidity
-    const args = [
-      '-c', TIMIDITY_CFG_PATH,
-      '-Ow',
-      '-o', wavPath,
-      rawMidPath
-    ];
-
-    console.log('🎶 Conversion Timidity (full) :', TIMIDITY_EXE, args.join(' '));
-    const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
-
-    console.log('📄 Timidity stdout:\n', convertProcess.stdout);
-    console.error('📄 Timidity stderr:\n', convertProcess.stderr);
-
-    if (convertProcess.error) {
-      console.error('❌ Erreur Timidity spawnSync:', convertProcess.error);
-      return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
-    }
-    if (convertProcess.status !== 0) {
-      console.error('❌ Timidity a quitté avec le code:', convertProcess.status);
-      return res.status(500).json({ error: 'Erreur lors de la conversion MIDI → WAV' });
-    }
+    // Conversion MIDI → WAV
+    convertMidToWav(rawMidPath, wavPath);
 
     if (!fs.existsSync(wavPath)) {
-      return res.status(500).json({ error: 'WAV final manquant après conversion' });
+      return res.status(500).json({ error: 'Fichier WAV manquant après conversion' });
     }
 
-    // Envoi du WAV complet au client
-    res.setHeader('Content-Type', 'audio/wav');
-    res.setHeader('Content-Disposition', `inline; filename="${beat.title}_full.wav"`);
-    res.sendFile(wavPath);
+    const wavUrl = `/temp/${path.basename(wavPath)}`;
+    console.log(`✅ Préparation terminée, wav accessible : ${wavUrl}`);
 
+    return res.json({ wavUrl });
   } catch (err) {
-    console.error('❌ Erreur serveur (play-full) :', err);
-    res.status(500).json({ error: 'Erreur serveur interne' });
+    console.error('❌ Erreur serveur (prepare-main) :', err);
+    return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation main' });
   }
 });
 
-// Nettoyage des fichiers temporaires
+// Route play-section (confirm que WAV est prêt, lecture côté client)
+router.post('/play-section', (req, res) => {
+  console.log('➡️ POST /api/player/play-section appelée');
+  // Pas de conversion ici, le wav est déjà prêt côté client
+  res.json({ message: 'Le fichier wav est prêt, lecture côté client' });
+});
+
+// Nettoyage fichiers temp (optionnel)
 router.post('/cleanup', async (req, res) => {
   console.log("➡️ POST /api/player/cleanup appelée");
   const { beatId } = req.body;
 
-  if (!beatId) {
-    return res.status(400).json({ error: 'beatId est requis' });
-  }
+  if (!beatId) return res.status(400).json({ error: 'beatId est requis' });
 
-  const filesToDelete = [
-    path.join(TEMP_DIR, `${beatId}_full_raw.mid`),
-    path.join(TEMP_DIR, `${beatId}_full.wav`),
-  ];
+  // Supprime tous fichiers temp liés au beat (raw midi + wav mainX)
+  const filesToDelete = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(beatId));
 
   try {
-    filesToDelete.forEach(filePath => {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
+    filesToDelete.forEach(file => {
+      const p = path.join(TEMP_DIR, file);
+      if (fs.existsSync(p)) fs.unlinkSync(p);
     });
-    console.log(`🧹 Fichiers supprimés pour beatId=${beatId}`);
+    console.log(`🧹 Fichiers temporaires supprimés pour beatId=${beatId}`);
     res.status(200).json({ message: 'Fichiers supprimés' });
   } catch (err) {
-    console.warn('⚠️ Problème lors du nettoyage :', err.message);
+    console.warn('⚠️ Problème nettoyage :', err.message);
     res.status(500).json({ error: 'Erreur lors du nettoyage' });
   }
 });
 
-// Route pour lister le contenu de /temp
+// Liste contenu dossier temp
 router.get('/temp', (req, res) => {
   console.log("➡️ GET /api/player/temp appelée");
 
@@ -168,7 +164,7 @@ router.get('/temp', (req, res) => {
       files: midiWavFiles
     });
   } catch (err) {
-    console.error('❌ Erreur lors de la lecture du dossier temp :', err.message);
+    console.error('❌ Erreur lecture dossier temp :', err.message);
     res.status(500).json({ error: 'Erreur lecture du dossier temp' });
   }
 });
