@@ -136,8 +136,10 @@ router.post('/prepare-main', async (req, res) => {
 
 // Route play-section (confirm que WAV est prêt, lecture côté client)
 router.post('/play-section', (req, res) => {
-  console.log('➡️ POST /api/player/play-section appelée');
-  res.json({ message: 'Le fichier wav est prêt, lecture côté client' });
+  const { beatId, mainLetter } = req.body;
+  console.log(`➡️ POST /api/player/play-section appelée pour beatId=${beatId} main=${mainLetter}`);
+  // Ici tu pourrais faire un log en base, analytics, etc.
+  res.json({ message: 'Lecture WAV confirmée côté serveur' });
 });
 
 // Nettoyage fichiers temp (optionnel)
