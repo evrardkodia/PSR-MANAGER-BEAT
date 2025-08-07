@@ -16,6 +16,9 @@ const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts');
 
+// Utilise la variable d'environnement FFMPEG_PATH ou 'ffmpeg' par défaut
+const FFMPEG_EXE = process.env.FFMPEG_PATH || 'ffmpeg';
+
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
 const TIMIDITY_CFG_PATH = path.join(__dirname, '..', 'timidity.cfg');
 
@@ -78,7 +81,7 @@ function convertMidToWav(midPath, wavPath) {
 function trimWavFile(wavPath, duration) {
   const trimmedPath = wavPath.replace(/\.wav$/, '_trimmed.wav');
   const args = ['-i', wavPath, '-t', `${duration}`, '-c', 'copy', trimmedPath];
-  const result = spawnSync('ffmpeg', args, { encoding: 'utf-8' });
+  const result = spawnSync(FFMPEG_EXE, args, { encoding: 'utf-8' });
 
   if (result.error || result.status !== 0) {
     console.error('❌ ffmpeg stderr:', result.stderr?.toString());
@@ -93,7 +96,8 @@ function trimWavFile(wavPath, duration) {
   console.log('🔪 WAV rogné à', duration, 'secondes');
 }
 
-// ✅ Route principale
+// Routes (pareil que ton code, inchangé)...
+
 router.post('/prepare-main', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-main appelée');
   const { beatId, mainLetter } = req.body;
