@@ -11,7 +11,7 @@ const prisma = new PrismaClient();
 console.log("🚀 routes/player.js chargé");
 
 // Chemins
-const TIMIDITY_EXE = 'timidity'; // timidity doit être installé et dans le PATH
+const TIMIDITY_EXE = 'timidity';
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts');
@@ -62,7 +62,6 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   return result.stdout;
 }
 
-// 🟡 MODIFIÉ : ajout --preserve-silence et -A120 pour Timidity
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath);
   const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
@@ -76,20 +75,25 @@ function convertMidToWav(midPath, wavPath) {
   console.log('✅ Conversion MIDI → WAV terminée');
 }
 
-// 🆕 AJOUTÉ : trim WAV avec ffmpeg
 function trimWavFile(wavPath, duration) {
   const trimmedPath = wavPath.replace(/\.wav$/, '_trimmed.wav');
   const args = ['-i', wavPath, '-t', `${duration}`, '-c', 'copy', trimmedPath];
-  const result = spawnSync('ffmpeg', args);
+  const result = spawnSync('ffmpeg', args, { encoding: 'utf-8' });
+
   if (result.error || result.status !== 0) {
-    console.error('❌ ffmpeg error:', result.stderr?.toString());
-    throw result.error || new Error('ffmpeg trim failed');
+    console.error('❌ ffmpeg stderr:', result.stderr?.toString());
+    console.error('❌ ffmpeg stdout:', result.stdout?.toString());
+    if (result.error && result.error.code === 'ENOENT') {
+      throw new Error('ffmpeg non trouvé dans l’environnement. Assure-toi qu’il est bien installé dans le Dockerfile.');
+    }
+    throw new Error('ffmpeg trim failed');
   }
+
   fs.renameSync(trimmedPath, wavPath);
   console.log('🔪 WAV rogné à', duration, 'secondes');
 }
 
-// ✅ Route qui prépare le main (extraction + conversion WAV)
+// ✅ Route principale
 router.post('/prepare-main', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-main appelée');
   const { beatId, mainLetter } = req.body;
@@ -142,7 +146,6 @@ router.post('/prepare-main', async (req, res) => {
 
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;
-
   if (!beatId || !mainLetter) {
     return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
   }
@@ -167,7 +170,6 @@ router.post('/play-section', (req, res) => {
 
 router.get('/stream', (req, res) => {
   const { beatId, mainLetter } = req.query;
-
   if (!beatId || !mainLetter) {
     return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
   }

@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Installer les dépendances système nécessaires
+# Installer les dépendances système nécessaires (FFmpeg ajouté)
 RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
@@ -19,7 +19,8 @@ RUN apt-get update && apt-get install -y \
     libpulse-dev \
     libreadline-dev \
     libfftw3-dev \
-    ca-certificates
+    ca-certificates \
+    ffmpeg
 
 # ✅ Installation de Timidity (sans suppression préalable)
 RUN apt update && \
