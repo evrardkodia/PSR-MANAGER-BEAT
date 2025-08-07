@@ -52,18 +52,19 @@ function extractMidiFromSty(styPath, outputMidPath) {
 }
 
 function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
-  console.log(`🔧 Extraction section "${sectionName}" via extract_main.py`);
-  const pyScript = path.join(SCRIPTS_DIR, 'extract_main.py');
-  const args = [pyScript, inputMidPath, outputMidPath, sectionName];
+ console.log(`🔧 Appel à extract_all_sections.py pour : ${inputMidPath}`);
+  const pyScript = path.join(SCRIPTS_DIR, 'extract_all_sections.py');
+  const args = [pyScript, inputMidPath];
   const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
   if (result.error) throw result.error;
-  if (result.stdout?.trim()) console.log('🐍 extract_main.py stdout:', result.stdout.trim());
-  if (result.stderr?.trim()) console.error('🐍 extract_main.py stderr:', result.stderr.trim());
-  if (result.status !== 0) throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
+  if (result.stdout?.trim()) console.log('🐍 extract_all_sections.py stdout:', result.stdout.trim());
+  if (result.stderr?.trim()) console.error('🐍 extract_all_sections.py stderr:', result.stderr.trim());
+  if (result.status !== 0) throw new Error(`extract_all_sections.py a échoué avec le code ${result.status}`);
 
   return result.stdout;
-}
+} 
+
 
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath);
