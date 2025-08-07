@@ -1,4 +1,4 @@
-const express = require('express'); 
+const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const fetch = require('node-fetch');
@@ -24,8 +24,6 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // --- Utils ---
 function publicBaseUrl(req) {
-  // Permet d'avoir une URL absolue, utile derrière un proxy (Render)
-  // Si tu définis PUBLIC_URL dans .env, elle est prioritaire
   const fromEnv = process.env.PUBLIC_URL;
   if (fromEnv) return fromEnv.replace(/\/$/, '');
   const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
@@ -33,7 +31,6 @@ function publicBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
-// Téléchargement du .sty depuis URL
 async function downloadStyFromUrl(url, destPath) {
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Erreur téléchargement fichier .sty : ${response.status} ${response.statusText}`);
@@ -42,7 +39,6 @@ async function downloadStyFromUrl(url, destPath) {
   console.log(`✅ Fichier .sty téléchargé : ${destPath}`);
 }
 
-// Extraction MIDI brut complet depuis .sty (header MThd)
 function extractMidiFromSty(styPath, outputMidPath) {
   const data = fs.readFileSync(styPath);
   const headerIndex = data.indexOf(Buffer.from('MThd'));
@@ -52,40 +48,24 @@ function extractMidiFromSty(styPath, outputMidPath) {
   console.log(`✅ MIDI brut extrait : ${outputMidPath}`);
 }
 
-// Extraction main via script Python : spawnSync avec logging complet
 function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   console.log(`🔧 Extraction section "${sectionName}" via extract_main.py`);
   const pyScript = path.join(SCRIPTS_DIR, 'extract_main.py');
-
-  // Arguments positionnels : input.mid output.mid section_name
   const args = [pyScript, inputMidPath, outputMidPath, sectionName];
-
   const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
-  if (result.error) {
-    console.error('❌ Erreur spawnSync:', result.error);
-    throw result.error;
-  }
+  if (result.error) throw result.error;
+  if (result.stdout?.trim()) console.log('🐍 extract_main.py stdout:', result.stdout.trim());
+  if (result.stderr?.trim()) console.error('🐍 extract_main.py stderr:', result.stderr.trim());
+  if (result.status !== 0) throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
 
-  if (result.stdout && result.stdout.trim() !== '') {
-    console.log('🐍 extract_main.py stdout:', result.stdout.trim());
-  }
-
-  if (result.stderr && result.stderr.trim() !== '') {
-    console.error('🐍 extract_main.py stderr:', result.stderr.trim());
-  }
-
-  if (result.status !== 0) {
-    throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
-  }
-
-  console.log('✅ Extraction section terminée');
+  return result.stdout;
 }
 
-// Conversion MIDI → WAV avec Timidity
+// 🟡 MODIFIÉ : ajout --preserve-silence et -A120 pour Timidity
 function convertMidToWav(midPath, wavPath) {
-  console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '-o', wavPath, midPath);
-  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '-o', wavPath, midPath];
+  console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath);
+  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
   const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
 
   if (convertProcess.error) throw convertProcess.error;
@@ -96,38 +76,49 @@ function convertMidToWav(midPath, wavPath) {
   console.log('✅ Conversion MIDI → WAV terminée');
 }
 
-// Route qui prépare le main (extraction + conversion WAV)
+// 🆕 AJOUTÉ : trim WAV avec ffmpeg
+function trimWavFile(wavPath, duration) {
+  const trimmedPath = wavPath.replace(/\.wav$/, '_trimmed.wav');
+  const args = ['-i', wavPath, '-t', `${duration}`, '-c', 'copy', trimmedPath];
+  const result = spawnSync('ffmpeg', args);
+  if (result.error || result.status !== 0) {
+    console.error('❌ ffmpeg error:', result.stderr?.toString());
+    throw result.error || new Error('ffmpeg trim failed');
+  }
+  fs.renameSync(trimmedPath, wavPath);
+  console.log('🔪 WAV rogné à', duration, 'secondes');
+}
+
+// ✅ Route qui prépare le main (extraction + conversion WAV)
 router.post('/prepare-main', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-main appelée');
   const { beatId, mainLetter } = req.body;
 
-  if (!beatId) return res.status(400).json({ error: 'beatId est requis' });
-  if (!mainLetter) return res.status(400).json({ error: 'mainLetter est requis' });
+  if (!beatId || !mainLetter) {
+    return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
+  }
 
   try {
     const beat = await prisma.beat.findUnique({ where: { id: beatId } });
-    if (!beat) return res.status(404).json({ error: 'Beat introuvable' });
-    if (!beat.url) return res.status(404).json({ error: 'URL du fichier .sty manquante' });
+    if (!beat || !beat.url) {
+      return res.status(404).json({ error: 'Beat ou URL introuvable' });
+    }
 
     const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
-
-    // Télécharger le .sty dans uploads/
     await downloadStyFromUrl(beat.url, inputStyPath);
 
-    // 1️⃣ Extraire le MIDI brut complet depuis .sty
     const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
     extractMidiFromSty(inputStyPath, fullMidPath);
 
-    // 2️⃣ Extraire la section "Main X" du MIDI complet via Python
     const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
-    const sectionName = `Main ${mainLetter}`; // ex: "Main A"
-    extractMainWithPython(fullMidPath, rawMidPath, sectionName);
+    const sectionName = `Main ${mainLetter}`;
+    const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionName);
+    const duration = parseFloat(stdout.trim());
 
     if (!fs.existsSync(rawMidPath)) {
       return res.status(500).json({ error: 'Fichier MIDI extrait manquant après extraction' });
     }
 
-    // 3️⃣ Conversion MIDI → WAV
     const wavPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}.wav`);
     convertMidToWav(rawMidPath, wavPath);
 
@@ -135,7 +126,11 @@ router.post('/prepare-main', async (req, res) => {
       return res.status(500).json({ error: 'Fichier WAV manquant après conversion' });
     }
 
-    const wavUrl = `/temp/${path.basename(wavPath)}`;
+    if (!isNaN(duration)) {
+      trimWavFile(wavPath, duration);
+    }
+
+    const wavUrl = `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`;
     console.log(`✅ Préparation terminée, wav accessible : ${wavUrl}`);
 
     return res.json({ wavUrl });
@@ -145,7 +140,6 @@ router.post('/prepare-main', async (req, res) => {
   }
 });
 
-// ✅ PLAY: vérifie le WAV et renvoie l'URL absolue exploitable par le navigateur
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;
 
@@ -164,16 +158,13 @@ router.post('/play-section', (req, res) => {
     return res.status(404).json({ error: 'Fichier WAV introuvable. Réessayez de préparer le main.' });
   }
 
-  const base = publicBaseUrl(req); // ex: https://psr-manager-beat.onrender.com
+  const base = publicBaseUrl(req);
   const wavUrl = `${base}/temp/${fileName}`;
   console.log(`✅ WAV prêt: ${wavUrl}`);
-
-  // Option: log/analytics en base ici
 
   return res.json({ wavUrl, message: 'Lecture WAV confirmée côté serveur' });
 });
 
-// (Optionnel) 📡 STREAM DIRECT: /api/player/stream?beatId=5&mainLetter=A
 router.get('/stream', (req, res) => {
   const { beatId, mainLetter } = req.query;
 
@@ -191,14 +182,12 @@ router.get('/stream', (req, res) => {
   return res.sendFile(fullPath);
 });
 
-// Nettoyage fichiers temp (optionnel)
 router.post('/cleanup', async (req, res) => {
   console.log("➡️ POST /api/player/cleanup appelée");
   const { beatId } = req.body;
 
   if (!beatId) return res.status(400).json({ error: 'beatId est requis' });
 
-  // Supprime tous fichiers temp liés au beat (raw midi + wav mainX)
   const filesToDelete = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(String(beatId)));
 
   try {
@@ -214,7 +203,6 @@ router.post('/cleanup', async (req, res) => {
   }
 });
 
-// Liste contenu dossier temp
 router.get('/temp', (req, res) => {
   console.log("➡️ GET /api/player/temp appelée");
 
