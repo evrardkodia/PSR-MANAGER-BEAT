@@ -228,4 +228,66 @@ router.get('/temp', (req, res) => {
   }
 });
 
+// ... tout ton code existant inchangé ici ...
+
+router.post('/prepare-all', async (req, res) => {
+  console.log('➡️ POST /api/player/prepare-all appelée');
+  const { beatId } = req.body;
+
+  if (!beatId) return res.status(400).json({ error: 'beatId est requis' });
+
+  const sectionNames = [
+    ...['A', 'B', 'C', 'D'].map(l => `Intro ${l}`),
+    ...['AA', 'BB', 'CC', 'DD'].map(l => `Fill In ${l}`),
+    ...['A', 'B', 'C', 'D'].map(l => `Main ${l}`),
+    ...['A', 'B', 'C', 'D'].map(l => `Ending ${l}`)
+  ];
+
+  try {
+    const beat = await prisma.beat.findUnique({ where: { id: beatId } });
+    if (!beat || !beat.url) {
+      return res.status(404).json({ error: 'Beat ou URL introuvable' });
+    }
+
+    const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
+    await downloadStyFromUrl(beat.url, inputStyPath);
+
+    const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
+    extractMidiFromSty(inputStyPath, fullMidPath);
+
+    const base = publicBaseUrl(req);
+    const results = [];
+
+    for (const section of sectionNames) {
+      const suffix = section.replace(/ /g, '_').toLowerCase(); // ex: "fill_in_bb"
+      const midOut = path.join(TEMP_DIR, `${beatId}_${suffix}.mid`);
+      const wavOut = path.join(TEMP_DIR, `${beatId}_${suffix}.wav`);
+
+      try {
+        const stdout = extractMainWithPython(fullMidPath, midOut, section);
+        const duration = parseFloat(stdout.trim());
+
+        if (!fs.existsSync(midOut)) throw new Error('Fichier MIDI manquant');
+
+        convertMidToWav(midOut, wavOut);
+        if (!fs.existsSync(wavOut)) throw new Error('WAV non généré');
+
+        if (!isNaN(duration)) trimWavFile(wavOut, duration);
+
+        results.push({
+          section,
+          wavUrl: `${base}/temp/${path.basename(wavOut)}`
+        });
+      } catch (e) {
+        console.warn(`⚠️ Section "${section}" ignorée : ${e.message}`);
+      }
+    }
+
+    res.json({ beatId, extracted: results });
+  } catch (err) {
+    console.error('❌ Erreur serveur (prepare-all) :', err);
+    res.status(500).json({ error: 'Erreur serveur interne' });
+  }
+});
+
 module.exports = router;
