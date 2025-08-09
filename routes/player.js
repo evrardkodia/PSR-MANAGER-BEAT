@@ -154,7 +154,9 @@ router.post('/prepare-all', async (req, res) => {
       }
     }
 
-    console.log(`✅ ${wavUrls.length} WAV générés`);
+    // Loguer les wavUrls dans les logs de Render
+    console.log('🔍 Sections WAV générées:', JSON.stringify(wavUrls, null, 2));
+
     return res.json({ wavs: wavUrls });
 
   } catch (err) {
