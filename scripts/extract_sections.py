@@ -31,7 +31,7 @@ def extract_section(mid, section_name, next_section_name, output_path):
                         break
 
         if start_tick is None:
-            return {"name": section_name, "success": False, "error": f"{section_name} non trouvé"}
+            return {section_name: 0}
 
         if end_tick is None:
             end_tick = mid.length * ticks_per_beat * 2  # estimation large
@@ -82,11 +82,11 @@ def extract_section(mid, section_name, next_section_name, output_path):
             out.tracks.append(new_track)
 
         out.save(output_path)
-        return {"name": section_name, "filename": os.path.basename(output_path), "success": True}
+        return {section_name: 1}
 
     except Exception as e:
         log_debug(traceback.format_exc())
-        return {"name": section_name, "success": False, "error": f"Erreur lors de l'extraction de {section_name}: {str(e)}"}
+        return {section_name: 0}
 
 def extract_all_sections(input_path, output_dir):
     if os.path.exists(DEBUG_LOG):
@@ -99,7 +99,7 @@ def extract_all_sections(input_path, output_dir):
         'Ending A', 'Ending B', 'Ending C', 'Ending D'
     ]
 
-    result = {"sections": []}
+    result = {"sections": {}}
     
     try:
         mid = MidiFile(input_path)
@@ -109,7 +109,7 @@ def extract_all_sections(input_path, output_dir):
             output_file = os.path.join(output_dir, f"{section.replace(' ', '_')}.mid")
             section_data = extract_section(mid, section, next_section, output_file)
 
-            result["sections"].append(section_data)
+            result["sections"].update(section_data)
 
         return json.dumps(result)
 
