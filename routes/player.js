@@ -262,7 +262,7 @@ if (!beatId || !mainLetter) {
   return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
 }
 
-const fileName = `${beatId}_main_${mainLetter}.wav`;
+const fileName = `${beatId}_Main_${mainLetter}.wav`;
 const fullPath = path.join(TEMP_DIR, fileName);
 
 console.log(`➡️ POST /api/player/play-section pour beatId=${beatId} main=${mainLetter}`);
