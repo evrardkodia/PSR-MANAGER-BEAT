@@ -21,6 +21,8 @@ const TIMIDITY_CFG_PATH = path.join(__dirname, '..', 'timidity.cfg');
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
+
+
 function publicBaseUrl(req) {
   const fromEnv = process.env.PUBLIC_URL;
   if (fromEnv) return fromEnv.replace(/\/$/, '');
@@ -44,20 +46,6 @@ function extractMidiFromSty(styPath, outputMidPath) {
   const midiData = data.slice(headerIndex);
   fs.writeFileSync(outputMidPath, midiData);
   console.log(`✅ MIDI brut extrait : ${outputMidPath}`);
-}
-
-function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
-  console.log(`🔧 Extraction section "${sectionName}" via extract_main.py`);
-  const pyScript = path.join(SCRIPTS_DIR, 'extract_main.py');
-  const args = [pyScript, inputMidPath, outputMidPath, sectionName];
-  const result = spawnSync('python3', args, { encoding: 'utf-8' });
-
-  if (result.error) throw result.error;
-  if (result.stdout?.trim()) console.log('🐍 extract_main.py stdout:', result.stdout.trim());
-  if (result.stderr?.trim()) console.error('🐍 extract_main.py stderr:', result.stderr.trim());
-  if (result.status !== 0) throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
-
-  return result.stdout;
 }
 
 function extractAllSectionsWithPython(inputMidPath, outputDir) {
@@ -87,12 +75,10 @@ function convertMidToWav(midPath, wavPath) {
   console.log('✅ Conversion MIDI → WAV terminée');
 
   // Renommer le fichier WAV pour correspondre à l'attendu
-// Renommer le fichier WAV pour correspondre à l'attendu
-const renamedWavPath = wavPath.replace(/\s+/g, '_');  // Remplace tous les espaces par des underscores
-fs.renameSync(wavPath, renamedWavPath);
-console.log(`✅ WAV renommé en : ${renamedWavPath}`);
+  const renamedWavPath = wavPath.replace(/\s+/g, '_');  // Remplace tous les espaces par des underscores
+  fs.renameSync(wavPath, renamedWavPath);
+  console.log(`✅ WAV renommé en : ${renamedWavPath}`);
 }
-
 
 function trimWavFile(wavPath, duration) {
   const trimmedPath = wavPath.replace(/\.wav$/, '_trimmed.wav');
@@ -166,6 +152,9 @@ router.post('/prepare-all', async (req, res) => {
     // Loguer le JSON wavUrls dans la console pour debugging
     console.log('🔍 Sections WAV générées:', JSON.stringify(wavUrls, null, 2));
 
+    // Log du contenu du dossier /temp/
+    logTempFolderContents();
+
     return res.json({ wavs: wavUrls });
 
   } catch (err) {
@@ -173,7 +162,6 @@ router.post('/prepare-all', async (req, res) => {
     return res.status(500).json({ error: 'Erreur lors de la préparation des sections' });
   }
 });
-
 
 router.get('/temp', (req, res) => {
   console.log("➡️ GET /api/player/temp appelée");
