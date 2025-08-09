@@ -85,7 +85,14 @@ function convertMidToWav(midPath, wavPath) {
     throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
   }
   console.log('✅ Conversion MIDI → WAV terminée');
+
+  // Renommer le fichier WAV pour correspondre à l'attendu
+// Renommer le fichier WAV pour correspondre à l'attendu
+const renamedWavPath = wavPath.replace(/\s+/g, '_');  // Remplace tous les espaces par des underscores
+fs.renameSync(wavPath, renamedWavPath);
+console.log(`✅ WAV renommé en : ${renamedWavPath}`);
 }
+
 
 function trimWavFile(wavPath, duration) {
   const trimmedPath = wavPath.replace(/\.wav$/, '_trimmed.wav');
@@ -262,7 +269,7 @@ if (!beatId || !mainLetter) {
   return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
 }
 
-const fileName = `${beatId}_Main_${mainLetter}.wav`.replace(/_/g, ' ');
+const fileName = `${beatId}_Main_${mainLetter}.wav`;
 const fullPath = path.join(TEMP_DIR, fileName);
 
 console.log(`➡️ POST /api/player/play-section pour beatId=${beatId} main=${mainLetter}`);
