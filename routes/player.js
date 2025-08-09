@@ -312,5 +312,15 @@ router.get('/stream', (req, res) => {
   res.setHeader('Content-Type', 'audio/wav');
   return res.sendFile(fullPath);
 });
+router.get('/list-temp', (req, res) => {
+  console.log("➡️ GET /api/player/list-temp appelée");
 
+  try {
+    const files = fs.readdirSync(TEMP_DIR);
+    res.json({ files });
+  } catch (err) {
+    console.error('❌ Erreur lecture dossier temp :', err.message);
+    res.status(500).json({ error: 'Erreur lecture du dossier temp' });
+  }
+});
 module.exports = router;
