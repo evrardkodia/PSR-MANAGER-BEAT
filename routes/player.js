@@ -135,36 +135,35 @@ router.post('/prepare-all', async (req, res) => {
 
     const outputDir = TEMP_DIR;
     const sections = extractAllSectionsWithPython(fullMidPath, outputDir);
-    
-const wavUrls = [];
-for (const [sectionName, presence] of Object.entries(sections)) {
-  if (presence === 1) {
-    const midPath = path.join(TEMP_DIR, `${beatId}_${sectionName}.mid`);
-    const wavPath = midPath.replace(/\.mid$/, '.wav');
 
-    // Conversion de MIDI à WAV
-    convertMidToWav(midPath, wavPath);
+    const wavUrls = [];
+    for (const [sectionName, presence] of Object.entries(sections)) {
+      if (presence === 1) {
+        const midPath = path.join(TEMP_DIR, `${beatId}_${sectionName}.mid`);
+        const wavPath = midPath.replace(/\.mid$/, '.wav');
 
-    if (!fs.existsSync(wavPath)) {
-      console.warn(`⚠️ WAV manquant pour ${sectionName}`);
-      continue;
+        // Conversion de MIDI à WAV
+        convertMidToWav(midPath, wavPath);
+
+        if (!fs.existsSync(wavPath)) {
+          console.warn(`⚠️ WAV manquant pour ${sectionName}`);
+          continue;
+        }
+
+        const duration = parseFloat(sections[sectionName]);
+        if (!isNaN(duration)) {
+          trimWavFile(wavPath, duration);
+        }
+
+        // Ajouter le nom exact du fichier WAV (avec underscores) au JSON
+        wavUrls.push({
+          section: sectionName,
+          url: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`
+        });
+      }
     }
 
-    const duration = parseFloat(sections[sectionName]);
-    if (!isNaN(duration)) {
-      trimWavFile(wavPath, duration);
-    }
-
-    // Ajouter le nom exact du fichier WAV (avec underscores) au JSON
-    wavUrls.push({
-      section: sectionName,
-      url: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`
-    });
-  }
-}
-
-
-    // Loguer les wavUrls dans les logs de Render
+    // Loguer le JSON wavUrls dans la console pour debugging
     console.log('🔍 Sections WAV générées:', JSON.stringify(wavUrls, null, 2));
 
     return res.json({ wavs: wavUrls });
@@ -174,6 +173,7 @@ for (const [sectionName, presence] of Object.entries(sections)) {
     return res.status(500).json({ error: 'Erreur lors de la préparation des sections' });
   }
 });
+
 
 router.get('/temp', (req, res) => {
   console.log("➡️ GET /api/player/temp appelée");
