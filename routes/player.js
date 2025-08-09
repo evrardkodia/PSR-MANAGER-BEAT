@@ -131,7 +131,11 @@ router.post('/prepare-all', async (req, res) => {
     const sections = extractAllSectionsWithPython(fullMidPath, outputDir);
 
     const wavUrls = [];
+    const sectionsState = {}; // Nouvelle structure pour garder l'état des sections
+
     for (const [sectionName, presence] of Object.entries(sections)) {
+      sectionsState[sectionName] = presence; // On assigne la valeur 1 ou 0 en fonction de la présence de la section
+
       if (presence === 1) {
         const midPath = path.join(TEMP_DIR, `${beatId}_${sectionName}.mid`);
         const wavPath = midPath.replace(/\.mid$/, '.wav');
@@ -163,13 +167,18 @@ router.post('/prepare-all', async (req, res) => {
     // Log du contenu du dossier /temp/
     logTempFolderContents();
 
-    return res.json({ wavs: wavUrls });
+    // Réponse avec l'état des sections et les URLs des WAVs
+    return res.json({ 
+      sectionsState: sectionsState, // Ajout de l'état des sections
+      wavs: wavUrls 
+    });
 
   } catch (err) {
     console.error('❌ Erreur serveur (prepare-all) :', err);
     return res.status(500).json({ error: 'Erreur lors de la préparation des sections' });
   }
 });
+
 
 // --- Route pour vérifier les fichiers temporaires ---
 router.get('/temp', (req, res) => {
