@@ -45,6 +45,7 @@ function extractMidiFromSty(styPath, outputMidPath) {
   fs.writeFileSync(outputMidPath, midiData);
   console.log(`✅ MIDI brut extrait : ${outputMidPath}`);
 }
+
 function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   console.log(`🔧 Extraction section "${sectionName}" via extract_main.py`);
   const pyScript = path.join(SCRIPTS_DIR, 'extract_main.py');
@@ -58,6 +59,7 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
 
   return result.stdout;
 }
+
 function extractAllSectionsWithPython(inputMidPath, outputDir) {
   const pyScript = path.join(SCRIPTS_DIR, 'extract_sections.py');
   const args = [pyScript, inputMidPath, outputDir];
@@ -69,7 +71,7 @@ function extractAllSectionsWithPython(inputMidPath, outputDir) {
   if (result.status !== 0) throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
 
   const parsedOutput = JSON.parse(result.stdout);
-  return parsedOutput.sections || [];
+  return parsedOutput.sections || {}; // Now returns an object
 }
 
 function convertMidToWav(midPath, wavPath) {
@@ -128,25 +130,28 @@ router.post('/prepare-all', async (req, res) => {
     const sections = extractAllSectionsWithPython(fullMidPath, outputDir);
 
     const wavUrls = [];
-    for (const { name, filename, duration } of sections) {
-      const midPath = path.join(TEMP_DIR, filename);
-      const wavPath = midPath.replace(/\.mid$/, '.wav');
+    for (const [sectionName, presence] of Object.entries(sections)) {
+      if (presence === 1) {
+        const midPath = path.join(TEMP_DIR, `${beatId}_${sectionName}.mid`);
+        const wavPath = midPath.replace(/\.mid$/, '.wav');
 
-      convertMidToWav(midPath, wavPath);
+        convertMidToWav(midPath, wavPath);
 
-      if (!fs.existsSync(wavPath)) {
-        console.warn(`⚠️ WAV manquant pour ${name}`);
-        continue;
+        if (!fs.existsSync(wavPath)) {
+          console.warn(`⚠️ WAV manquant pour ${sectionName}`);
+          continue;
+        }
+
+        const duration = parseFloat(sections[sectionName]);
+        if (!isNaN(duration)) {
+          trimWavFile(wavPath, duration);
+        }
+
+        wavUrls.push({
+          section: sectionName,
+          url: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`
+        });
       }
-
-      if (!isNaN(duration)) {
-        trimWavFile(wavPath, duration);
-      }
-
-      wavUrls.push({
-        section: name,
-        url: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`
-      });
     }
 
     console.log(`✅ ${wavUrls.length} WAV générés`);
@@ -176,6 +181,7 @@ router.get('/temp', (req, res) => {
     res.status(500).json({ error: 'Erreur lecture du dossier temp' });
   }
 });
+
 router.post('/cleanup', async (req, res) => {
   console.log("➡️ POST /api/player/cleanup appelée");
   const { beatId } = req.body;
@@ -289,4 +295,5 @@ router.get('/stream', (req, res) => {
 });
 // autres routes (unchanged)...
 
+// autres routes (inchangées)...
 module.exports = router;
