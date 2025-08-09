@@ -2,6 +2,7 @@ from mido import MidiFile, MidiTrack, Message
 import os
 import sys
 import traceback
+import json
 
 DEBUG_LOG = os.path.join(os.path.dirname(__file__), 'python_debug.log')
 
@@ -30,8 +31,7 @@ def extract_section(mid, section_name, next_section_name, output_path):
                         break
 
         if start_tick is None:
-            print(f"{section_name} non trouvé")
-            return False
+            return {"name": section_name, "success": False, "error": f"{section_name} non trouvé"}
 
         if end_tick is None:
             end_tick = mid.length * ticks_per_beat * 2  # estimation large
@@ -82,36 +82,40 @@ def extract_section(mid, section_name, next_section_name, output_path):
             out.tracks.append(new_track)
 
         out.save(output_path)
-        print(f"✅ {section_name} extrait → {os.path.basename(output_path)}")
-        return True
+        return {"name": section_name, "filename": os.path.basename(output_path), "success": True}
 
     except Exception as e:
-        print(f"Erreur lors de l'extraction de {section_name}: {e}")
         log_debug(traceback.format_exc())
-        return False
+        return {"name": section_name, "success": False, "error": f"Erreur lors de l'extraction de {section_name}: {str(e)}"}
 
 def extract_all_sections(input_path, output_dir):
     if os.path.exists(DEBUG_LOG):
         os.remove(DEBUG_LOG)
 
+    sections = [
+        'Intro A', 'Intro B', 'Intro C', 'Intro D',
+        'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
+        'Main A', 'Main B', 'Main C', 'Main D',
+        'Ending A', 'Ending B', 'Ending C', 'Ending D'
+    ]
+
+    result = {"sections": []}
+    
     try:
         mid = MidiFile(input_path)
-
-        sections = [
-            'Intro A', 'Intro B', 'Intro C', 'Intro D',
-            'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
-            'Main A', 'Main B', 'Main C', 'Main D',
-            'Ending A', 'Ending B', 'Ending C', 'Ending D'
-        ]
 
         for i, section in enumerate(sections):
             next_section = sections[i + 1] if i + 1 < len(sections) else None
             output_file = os.path.join(output_dir, f"{section.replace(' ', '_')}.mid")
-            extract_section(mid, section, next_section, output_file)
+            section_data = extract_section(mid, section, next_section, output_file)
+
+            result["sections"].append(section_data)
+
+        return json.dumps(result)
 
     except Exception as e:
-        print(f"Erreur générale : {e}")
         log_debug(traceback.format_exc())
+        return json.dumps({"error": f"Erreur générale : {str(e)}"})
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
@@ -124,4 +128,4 @@ if __name__ == "__main__":
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
 
-    extract_all_sections(input_mid, output_directory)
+    print(extract_all_sections(input_mid, output_directory))
