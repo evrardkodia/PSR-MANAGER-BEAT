@@ -258,26 +258,34 @@ router.post('/prepare-main', async (req, res) => {
 
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;
-  if (!beatId || !mainLetter) {
-    return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
-  }
+if (!beatId || !mainLetter) {
+  return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
+}
 
-  const fileName = `${beatId}_main_${mainLetter}.wav`;
-  const fullPath = path.join(TEMP_DIR, fileName);
+const fileName = `${beatId}_main_${mainLetter}.wav`;
+const fullPath = path.join(TEMP_DIR, fileName);
 
-  console.log(`➡️ POST /api/player/play-section pour beatId=${beatId} main=${mainLetter}`);
-  console.log(`🔎 Vérification existence: ${fullPath}`);
+console.log(`➡️ POST /api/player/play-section pour beatId=${beatId} main=${mainLetter}`);
+console.log(`🔎 Vérification existence: ${fullPath}`);
 
-  if (!fs.existsSync(fullPath)) {
-    console.error(`❌ Fichier introuvable: ${fullPath}`);
-    return res.status(404).json({ error: 'Fichier WAV introuvable. Réessayez de préparer le main.' });
-  }
+// Vérifier si le fichier existe
+if (!fs.existsSync(fullPath)) {
+  console.error(`❌ Fichier introuvable: ${fullPath}`);
+  
+  // Afficher les fichiers disponibles pour debug
+  const availableFiles = fs.readdirSync(TEMP_DIR);
+  console.log('📂 Fichiers disponibles dans le répertoire TEMP:', availableFiles);
 
-  const base = publicBaseUrl(req);
-  const wavUrl = `${base}/temp/${fileName}`;
-  console.log(`✅ WAV prêt: ${wavUrl}`);
+  return res.status(404).json({ error: 'Fichier WAV introuvable. Réessayez de préparer le main.' });
+}
 
-  return res.json({ wavUrl, message: 'Lecture WAV confirmée côté serveur' });
+const base = publicBaseUrl(req);
+const wavUrl = `${base}/temp/${fileName}`;
+console.log(`✅ WAV prêt: ${wavUrl}`);
+
+// Renvoie le chemin du fichier WAV prêt à être lu
+return res.json({ wavUrl, message: 'Lecture WAV confirmée côté serveur' });
+
 });
 
 router.get('/stream', (req, res) => {
