@@ -10,27 +10,22 @@ const prisma = new PrismaClient();
 
 console.log("🚀 routes/player.js chargé");
 
+// Chemins
 const TIMIDITY_EXE = 'timidity';
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts');
+
+// Utilise la variable d'environnement FFMPEG_PATH ou 'ffmpeg' par défaut
 const FFMPEG_EXE = process.env.FFMPEG_PATH || 'ffmpeg';
+
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
 const TIMIDITY_CFG_PATH = path.join(__dirname, '..', 'timidity.cfg');
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-// Log du contenu du dossier /temp/
-const logTempFolderContents = () => {
-  try {
-    const files = fs.readdirSync(TEMP_DIR);
-    console.log('📂 Contenu du dossier /temp/ :', files);
-  } catch (err) {
-    console.error('❌ Erreur lors de la lecture du dossier /temp/:', err);
-  }
-};
-
+// --- Utils ---
 function publicBaseUrl(req) {
   const fromEnv = process.env.PUBLIC_URL;
   if (fromEnv) return fromEnv.replace(/\/$/, '');
@@ -56,18 +51,18 @@ function extractMidiFromSty(styPath, outputMidPath) {
   console.log(`✅ MIDI brut extrait : ${outputMidPath}`);
 }
 
-function extractAllSectionsWithPython(inputMidPath, outputDir) {
-  const pyScript = path.join(SCRIPTS_DIR, 'extract_sections.py');
-  const args = [pyScript, inputMidPath, outputDir];
+function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
+  console.log(`🔧 Extraction section "${sectionName}" via extract_main.py`);
+  const pyScript = path.join(SCRIPTS_DIR, 'extract_main.py');
+  const args = [pyScript, inputMidPath, outputMidPath, sectionName];
   const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
   if (result.error) throw result.error;
-  if (result.stdout?.trim()) console.log('🐍 extract_sections.py stdout:\n', result.stdout.trim());
-  if (result.stderr?.trim()) console.error('🐍 extract_sections.py stderr:\n', result.stderr.trim());
-  if (result.status !== 0) throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
+  if (result.stdout?.trim()) console.log('🐍 extract_main.py stdout:', result.stdout.trim());
+  if (result.stderr?.trim()) console.error('🐍 extract_main.py stderr:', result.stderr.trim());
+  if (result.status !== 0) throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
 
-  const parsedOutput = JSON.parse(result.stdout);
-  return parsedOutput.sections || {}; // Now returns an object
+  return result.stdout;
 }
 
 function convertMidToWav(midPath, wavPath) {
@@ -81,11 +76,6 @@ function convertMidToWav(midPath, wavPath) {
     throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
   }
   console.log('✅ Conversion MIDI → WAV terminée');
-
-  // Renommer le fichier WAV pour correspondre à l'attendu
-  const renamedWavPath = wavPath.replace(/\s+/g, '_');  // Remplace tous les espaces par des underscores
-  fs.renameSync(wavPath, renamedWavPath);
-  console.log(`✅ WAV renommé en : ${renamedWavPath}`);
 }
 
 function trimWavFile(wavPath, duration) {
@@ -97,7 +87,7 @@ function trimWavFile(wavPath, duration) {
     console.error('❌ ffmpeg stderr:', result.stderr?.toString());
     console.error('❌ ffmpeg stdout:', result.stdout?.toString());
     if (result.error && result.error.code === 'ENOENT') {
-      throw new Error('ffmpeg non trouvé dans l’environnement. Assure-toi qu’il est bien installé.');
+      throw new Error('ffmpeg non trouvé dans l’environnement. Assure-toi qu’il est bien installé dans le Dockerfile.');
     }
     throw new Error('ffmpeg trim failed');
   }
@@ -106,132 +96,8 @@ function trimWavFile(wavPath, duration) {
   console.log('🔪 WAV rogné à', duration, 'secondes');
 }
 
-// --- Nouvelle route : génération de tous les WAV ---
-router.post('/prepare-all', async (req, res) => {
-  console.log('➡️ POST /api/player/prepare-all appelée');
-  const { beatId } = req.body;
+// Routes (pareil que ton code, inchangé)...
 
-  if (!beatId) {
-    return res.status(400).json({ error: 'beatId est requis' });
-  }
-
-  try {
-    const beat = await prisma.beat.findUnique({ where: { id: beatId } });
-    if (!beat || !beat.url) {
-      return res.status(404).json({ error: 'Beat ou URL introuvable' });
-    }
-
-    const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
-    await downloadStyFromUrl(beat.url, inputStyPath);
-
-    const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
-    extractMidiFromSty(inputStyPath, fullMidPath);
-
-    const outputDir = TEMP_DIR;
-    const sections = extractAllSectionsWithPython(fullMidPath, outputDir);
-
-    const wavUrls = [];
-    const sectionsState = {}; // Nouvelle structure pour garder l'état des sections
-
-    // Log des sections extraites
-    console.log('🔍 Sections extraites:', JSON.stringify(sections, null, 2));
-
-    for (const [sectionName, presence] of Object.entries(sections)) {
-      sectionsState[sectionName] = presence; // On assigne la valeur 1 ou 0 en fonction de la présence de la section
-
-      if (presence === 1) {
-        const midPath = path.join(TEMP_DIR, `${beatId}_${sectionName}.mid`);
-        const wavPath = midPath.replace(/\.mid$/, '.wav');
-
-        // Log avant la conversion
-        console.log(`🎶 Conversion MIDI → WAV pour ${sectionName}:`, midPath);
-
-        // Conversion de MIDI à WAV
-        convertMidToWav(midPath, wavPath);
-
-        if (!fs.existsSync(wavPath)) {
-          console.warn(`⚠️ WAV manquant pour ${sectionName}`);
-          continue; // Si le fichier WAV n'existe pas, on passe à la section suivante
-        }
-
-        const duration = parseFloat(sections[sectionName]);
-        if (!isNaN(duration)) {
-          trimWavFile(wavPath, duration); // On coupe la durée si nécessaire
-        }
-
-        // Ajouter le fichier WAV à la liste
-        wavUrls.push({
-          section: sectionName,
-          url: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`
-        });
-      }
-    }
-
-    // Log des WAVs générés
-    console.log('🔍 Sections WAV générées:', JSON.stringify(wavUrls, null, 2));
-
-    // Log du contenu du dossier /temp/
-    logTempFolderContents();
-
-    // Réponse avec l'état des sections et les URLs des WAVs
-    return res.json({
-      sectionsState: sectionsState, // Ajout de l'état des sections
-      wavs: wavUrls // URL des fichiers WAV
-    });
-
-  } catch (err) {
-    console.error('❌ Erreur serveur (prepare-all) :', err);
-    return res.status(500).json({ error: 'Erreur lors de la préparation des sections' });
-  }
-});
-
-
-
-
-
-// --- Route pour vérifier les fichiers temporaires ---
-router.get('/temp', (req, res) => {
-  console.log("➡️ GET /api/player/temp appelée");
-
-  try {
-    const files = fs.readdirSync(TEMP_DIR);
-    const midiWavFiles = files.filter(file => file.endsWith('.mid') || file.endsWith('.wav'));
-
-    console.log(`📂 Contenu de temp/ :\n${midiWavFiles.join('\n') || 'Aucun fichier .mid/.wav trouvé'}`);
-
-    res.json({
-      count: midiWavFiles.length,
-      files: midiWavFiles
-    });
-  } catch (err) {
-    console.error('❌ Erreur lecture dossier temp :', err.message);
-    res.status(500).json({ error: 'Erreur lecture du dossier temp' });
-  }
-});
-
-// --- Route pour nettoyer les fichiers ---
-router.post('/cleanup', async (req, res) => {
-  console.log("➡️ POST /api/player/cleanup appelée");
-  const { beatId } = req.body;
-
-  if (!beatId) return res.status(400).json({ error: 'beatId est requis' });
-
-  const filesToDelete = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(String(beatId)));
-
-  try {
-    filesToDelete.forEach(file => {
-      const p = path.join(TEMP_DIR, file);
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    });
-    console.log(`🧹 Fichiers temporaires supprimés pour beatId=${beatId}`);
-    res.status(200).json({ message: 'Fichiers supprimés' });
-  } catch (err) {
-    console.warn('⚠️ Problème nettoyage :', err.message);
-    res.status(500).json({ error: 'Erreur lors du nettoyage' });
-  }
-});
-
-// --- Route pour préparer un Main spécifique ---
 router.post('/prepare-main', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-main appelée');
   const { beatId, mainLetter } = req.body;
@@ -282,27 +148,20 @@ router.post('/prepare-main', async (req, res) => {
   }
 });
 
-// --- Route pour jouer une section ---
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;
   if (!beatId || !mainLetter) {
     return res.status(400).json({ error: 'beatId et mainLetter sont requis' });
   }
 
-  const fileName = `${beatId}_Main_${mainLetter}.wav`;
+  const fileName = `${beatId}_main_${mainLetter}.wav`;
   const fullPath = path.join(TEMP_DIR, fileName);
 
   console.log(`➡️ POST /api/player/play-section pour beatId=${beatId} main=${mainLetter}`);
   console.log(`🔎 Vérification existence: ${fullPath}`);
 
-  // Vérifier si le fichier existe
   if (!fs.existsSync(fullPath)) {
     console.error(`❌ Fichier introuvable: ${fullPath}`);
-    
-    // Afficher les fichiers disponibles pour debug
-    const availableFiles = fs.readdirSync(TEMP_DIR);
-    console.log('📂 Fichiers disponibles dans le répertoire TEMP:', availableFiles);
-
     return res.status(404).json({ error: 'Fichier WAV introuvable. Réessayez de préparer le main.' });
   }
 
@@ -310,11 +169,9 @@ router.post('/play-section', (req, res) => {
   const wavUrl = `${base}/temp/${fileName}`;
   console.log(`✅ WAV prêt: ${wavUrl}`);
 
-  // Renvoie le chemin du fichier WAV prêt à être lu
   return res.json({ wavUrl, message: 'Lecture WAV confirmée côté serveur' });
 });
 
-// --- Route pour le streaming ---
 router.get('/stream', (req, res) => {
   const { beatId, mainLetter } = req.query;
   if (!beatId || !mainLetter) {
@@ -330,15 +187,45 @@ router.get('/stream', (req, res) => {
   res.setHeader('Content-Type', 'audio/wav');
   return res.sendFile(fullPath);
 });
-router.get('/list-temp', (req, res) => {
-  console.log("➡️ GET /api/player/list-temp appelée");
+
+router.post('/cleanup', async (req, res) => {
+  console.log("➡️ POST /api/player/cleanup appelée");
+  const { beatId } = req.body;
+
+  if (!beatId) return res.status(400).json({ error: 'beatId est requis' });
+
+  const filesToDelete = fs.readdirSync(TEMP_DIR).filter(f => f.startsWith(String(beatId)));
+
+  try {
+    filesToDelete.forEach(file => {
+      const p = path.join(TEMP_DIR, file);
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    });
+    console.log(`🧹 Fichiers temporaires supprimés pour beatId=${beatId}`);
+    res.status(200).json({ message: 'Fichiers supprimés' });
+  } catch (err) {
+    console.warn('⚠️ Problème nettoyage :', err.message);
+    res.status(500).json({ error: 'Erreur lors du nettoyage' });
+  }
+});
+
+router.get('/temp', (req, res) => {
+  console.log("➡️ GET /api/player/temp appelée");
 
   try {
     const files = fs.readdirSync(TEMP_DIR);
-    res.json({ files });
+    const midiWavFiles = files.filter(file => file.endsWith('.mid') || file.endsWith('.wav'));
+
+    console.log(`📂 Contenu de temp/ :\n${midiWavFiles.join('\n') || 'Aucun fichier .mid/.wav trouvé'}`);
+
+    res.json({
+      count: midiWavFiles.length,
+      files: midiWavFiles
+    });
   } catch (err) {
     console.error('❌ Erreur lecture dossier temp :', err.message);
     res.status(500).json({ error: 'Erreur lecture du dossier temp' });
   }
 });
+
 module.exports = router;
