@@ -180,6 +180,7 @@ router.post('/prepare-all', async (req, res) => {
 });
 
 
+
 // --- Route pour vérifier les fichiers temporaires ---
 router.get('/temp', (req, res) => {
   console.log("➡️ GET /api/player/temp appelée");
