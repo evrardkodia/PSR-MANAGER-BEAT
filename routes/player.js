@@ -52,8 +52,8 @@ function extractMidiFromSty(styPath, outputMidPath) {
 }
 
 function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
-  console.log(`🔧 Extraction section "${sectionName}" via extract_main.py`);
-  const pyScript = path.join(SCRIPTS_DIR, 'extract_main.py');
+  console.log(`🔧 Extraction section "${sectionName}" via extract_sections.py`);
+  const pyScript = path.join(SCRIPTS_DIR, 'extract_sections.py');
   const args = [pyScript, inputMidPath, outputMidPath, sectionName];
   const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
