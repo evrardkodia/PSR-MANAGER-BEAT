@@ -133,6 +133,9 @@ router.post('/prepare-all', async (req, res) => {
     const wavUrls = [];
     const sectionsState = {}; // Nouvelle structure pour garder l'état des sections
 
+    // Log des sections
+    console.log('🔍 Sections extraites:', JSON.stringify(sections, null, 2));
+
     for (const [sectionName, presence] of Object.entries(sections)) {
       sectionsState[sectionName] = presence; // On assigne la valeur 1 ou 0 en fonction de la présence de la section
 
@@ -161,7 +164,7 @@ router.post('/prepare-all', async (req, res) => {
       }
     }
 
-    // Loguer le JSON wavUrls dans la console pour debugging
+    // Log des WAVs générés
     console.log('🔍 Sections WAV générées:', JSON.stringify(wavUrls, null, 2));
 
     // Log du contenu du dossier /temp/
@@ -170,7 +173,7 @@ router.post('/prepare-all', async (req, res) => {
     // Réponse avec l'état des sections et les URLs des WAVs
     return res.json({ 
       sectionsState: sectionsState, // Ajout de l'état des sections
-      wavs: wavUrls 
+      wavs: wavUrls // URL des fichiers WAV
     });
 
   } catch (err) {
@@ -178,6 +181,7 @@ router.post('/prepare-all', async (req, res) => {
     return res.status(500).json({ error: 'Erreur lors de la préparation des sections' });
   }
 });
+
 
 
 
