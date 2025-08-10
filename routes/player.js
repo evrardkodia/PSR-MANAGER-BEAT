@@ -133,7 +133,7 @@ router.post('/prepare-all', async (req, res) => {
     const wavUrls = [];
     const sectionsState = {}; // Nouvelle structure pour garder l'état des sections
 
-    // Log des sections
+    // Log des sections extraites
     console.log('🔍 Sections extraites:', JSON.stringify(sections, null, 2));
 
     for (const [sectionName, presence] of Object.entries(sections)) {
@@ -143,20 +143,23 @@ router.post('/prepare-all', async (req, res) => {
         const midPath = path.join(TEMP_DIR, `${beatId}_${sectionName}.mid`);
         const wavPath = midPath.replace(/\.mid$/, '.wav');
 
+        // Log avant la conversion
+        console.log(`🎶 Conversion MIDI → WAV pour ${sectionName}:`, midPath);
+
         // Conversion de MIDI à WAV
         convertMidToWav(midPath, wavPath);
 
         if (!fs.existsSync(wavPath)) {
           console.warn(`⚠️ WAV manquant pour ${sectionName}`);
-          continue;
+          continue; // Si le fichier WAV n'existe pas, on passe à la section suivante
         }
 
         const duration = parseFloat(sections[sectionName]);
         if (!isNaN(duration)) {
-          trimWavFile(wavPath, duration);
+          trimWavFile(wavPath, duration); // On coupe la durée si nécessaire
         }
 
-        // Ajouter le nom exact du fichier WAV (avec underscores) au JSON
+        // Ajouter le fichier WAV à la liste
         wavUrls.push({
           section: sectionName,
           url: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`
@@ -171,7 +174,7 @@ router.post('/prepare-all', async (req, res) => {
     logTempFolderContents();
 
     // Réponse avec l'état des sections et les URLs des WAVs
-    return res.json({ 
+    return res.json({
       sectionsState: sectionsState, // Ajout de l'état des sections
       wavs: wavUrls // URL des fichiers WAV
     });
@@ -181,6 +184,7 @@ router.post('/prepare-all', async (req, res) => {
     return res.status(500).json({ error: 'Erreur lors de la préparation des sections' });
   }
 });
+
 
 
 
