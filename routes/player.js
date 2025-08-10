@@ -331,7 +331,7 @@ router.post('/cleanup', async (req, res) => {
   }
 });
 
-router.get('/temps', async (req, res) => {
+router.get('/list-temps', async (req, res) => {
   try {
     const files = await fs.promises.readdir(TEMP_DIR);
     // Optionnel: filtre les fichiers audio/midi ou retourne tout
