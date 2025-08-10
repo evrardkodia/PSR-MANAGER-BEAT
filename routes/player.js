@@ -181,8 +181,13 @@ router.post('/prepare-all', async (req, res) => {
     if (result.error) throw result.error;
     if (result.stdout?.trim()) {
       // Loguer le JSON renvoyé par Python dans Render
-      fs.appendFileSync(path.join(__dirname, '..', 'python_debug.log'), `${result.stdout.trim()}\n`);
+      const jsonOutput = result.stdout.trim();
+      console.log('🐍 extract_sections.py stdout:', jsonOutput);
+      
+      // Enregistrer dans python_debug.log pour le consulter dans Render
+      fs.appendFileSync(path.join(__dirname, '..', 'python_debug.log'), `${jsonOutput}\n`);
     }
+
     if (result.stderr?.trim()) console.error('🐍 extract_sections.py stderr:', result.stderr.trim());
     if (result.status !== 0) throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
 
@@ -194,6 +199,7 @@ router.post('/prepare-all', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
+
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;
   if (!beatId || !mainLetter) {
