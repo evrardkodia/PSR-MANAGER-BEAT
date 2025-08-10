@@ -51,7 +51,7 @@ function extractMidiFromSty(styPath, outputMidPath) {
   console.log(`✅ MIDI brut extrait : ${outputMidPath}`);
 }
 
-function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
+function extractSectionWithPython(inputMidPath, outputMidPath, sectionName) {
   console.log(`🔧 Extraction section "${sectionName}" via extract_sections.py`);
   const pyScript = path.join(SCRIPTS_DIR, 'extract_sections.py');
   const args = [pyScript, inputMidPath, outputMidPath, sectionName];
@@ -63,20 +63,19 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   }
 
   if (result.stdout?.trim()) {
-    console.log('🐍 extract_main.py stdout:', result.stdout.trim());
+    console.log('🐍 extract_sections.py stdout:', result.stdout.trim());
   }
 
   if (result.stderr?.trim()) {
-    console.error('🐍 extract_main.py stderr:', result.stderr.trim());
+    console.error('🐍 extract_sections.py stderr:', result.stderr.trim());
   }
 
   if (result.status !== 0) {
-    throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
+    throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
   }
 
   return result.stdout;
 }
-
 
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath);
@@ -133,7 +132,7 @@ router.post('/prepare-main', async (req, res) => {
 
     const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
     const sectionName = `Main ${mainLetter}`;
-    const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionName);
+    const stdout = extractSectionWithPython(fullMidPath, rawMidPath, sectionName);
     const duration = parseFloat(stdout.trim());
 
     if (!fs.existsSync(rawMidPath)) {
@@ -215,8 +214,8 @@ router.post('/prepare-all', async (req, res) => {
       const rawMidPath = path.join(TEMP_DIR, `${beatId}_${safeName}_raw.mid`);
       const wavPath = path.join(TEMP_DIR, `${beatId}_${safeName}.wav`);
 
-      // Extrait section du fullMid (comme extractMainWithPython)
-      const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionLabel);
+      // Extrait section du fullMid (comme extractSectionWithPython)
+      const stdout = extractSectionWithPython(fullMidPath, rawMidPath, sectionLabel);
       const duration = parseFloat(stdout.trim());
 
       if (!fs.existsSync(rawMidPath)) {
@@ -239,10 +238,6 @@ router.post('/prepare-all', async (req, res) => {
     // Parcours des sections extraites
     for (const [sectionName, present] of Object.entries(sectionsJson.sections)) {
       if (present === 1) {
-        // IMPORTANT: Adaptation casse frontend <-> backend : convertit sectionName pour extraction
-        // Par exemple : "Main A" -> "Main A" (exact), mais frontend envoie "main" ou "MAIN" => backend accepte "Main"
-        // Ici on utilise exactement la casse telle quelle pour l'extraction
-
         try {
           const wavUrl = extractConvertTrim(sectionName, sectionName);
           wavUrls[sectionName.toLowerCase()] = wavUrl;
@@ -266,9 +261,6 @@ router.post('/prepare-all', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
-
-
-
 
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;
@@ -342,4 +334,5 @@ router.get('/list-temps', async (req, res) => {
     res.status(500).json({ error: 'Impossible de lire le dossier temp' });
   }
 });
+
 module.exports = router;
