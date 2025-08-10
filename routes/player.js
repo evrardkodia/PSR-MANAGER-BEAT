@@ -58,7 +58,11 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
   if (result.error) throw result.error;
-  if (result.stdout?.trim()) console.log('🐍 extract_main.py stdout:', result.stdout.trim());
+  if (result.stdout?.trim()) {
+    console.log('🐍 extract_main.py stdout:', result.stdout.trim());
+    // Loguer le JSON renvoyé par Python dans Render
+    fs.appendFileSync(path.join(__dirname, '..', 'python_debug.log'), `${result.stdout.trim()}\n`);
+  }
   if (result.stderr?.trim()) console.error('🐍 extract_main.py stderr:', result.stderr.trim());
   if (result.status !== 0) throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
 
@@ -96,7 +100,7 @@ function trimWavFile(wavPath, duration) {
   console.log('🔪 WAV rogné à', duration, 'secondes');
 }
 
-// Routes (pareil que ton code, inchangé)...
+// Routes
 
 router.post('/prepare-main', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-main appelée');
@@ -148,6 +152,48 @@ router.post('/prepare-main', async (req, res) => {
   }
 });
 
+// --- Log de la structure de sections ---
+router.post('/prepare-all', async (req, res) => {
+  console.log('➡️ POST /api/player/prepare-all appelée');
+  const { beatId } = req.body;
+
+  if (!beatId) {
+    return res.status(400).json({ error: 'beatId est requis' });
+  }
+
+  try {
+    const beat = await prisma.beat.findUnique({ where: { id: beatId } });
+    if (!beat || !beat.url) {
+      return res.status(404).json({ error: 'Beat ou URL introuvable' });
+    }
+
+    const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
+    await downloadStyFromUrl(beat.url, inputStyPath);
+
+    const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
+    extractMidiFromSty(inputStyPath, fullMidPath);
+
+    const outputDir = TEMP_DIR;
+    const pyScript = path.join(SCRIPTS_DIR, 'extract_sections.py');
+    const args = [pyScript, fullMidPath, outputDir];
+    const result = spawnSync('python3', args, { encoding: 'utf-8' });
+
+    if (result.error) throw result.error;
+    if (result.stdout?.trim()) {
+      // Loguer le JSON renvoyé par Python dans Render
+      fs.appendFileSync(path.join(__dirname, '..', 'python_debug.log'), `${result.stdout.trim()}\n`);
+    }
+    if (result.stderr?.trim()) console.error('🐍 extract_sections.py stderr:', result.stderr.trim());
+    if (result.status !== 0) throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
+
+    const sectionsJson = JSON.parse(result.stdout.trim());
+    return res.json(sectionsJson);
+
+  } catch (err) {
+    console.error('❌ Erreur serveur (prepare-all) :', err);
+    return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
+  }
+});
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;
   if (!beatId || !mainLetter) {
@@ -227,5 +273,4 @@ router.get('/temp', (req, res) => {
     res.status(500).json({ error: 'Erreur lecture du dossier temp' });
   }
 });
-
 module.exports = router;
