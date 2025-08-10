@@ -331,22 +331,15 @@ router.post('/cleanup', async (req, res) => {
   }
 });
 
-router.get('/temp', (req, res) => {
-  console.log("➡️ GET /api/player/temp appelée");
-
+router.get('/temps', async (req, res) => {
   try {
-    const files = fs.readdirSync(TEMP_DIR);
-    const midiWavFiles = files.filter(file => file.endsWith('.mid') || file.endsWith('.wav'));
-
-    console.log(`📂 Contenu de temp/ :\n${midiWavFiles.join('\n') || 'Aucun fichier .mid/.wav trouvé'}`);
-
-    res.json({
-      count: midiWavFiles.length,
-      files: midiWavFiles
-    });
+    const files = await fs.promises.readdir(TEMP_DIR);
+    // Optionnel: filtre les fichiers audio/midi ou retourne tout
+    // const filteredFiles = files.filter(f => /\.(wav|mid|midi)$/i.test(f));
+    res.json({ files });
   } catch (err) {
-    console.error('❌ Erreur lecture dossier temp :', err.message);
-    res.status(500).json({ error: 'Erreur lecture du dossier temp' });
+    console.error('❌ Erreur lecture dossier temp:', err);
+    res.status(500).json({ error: 'Impossible de lire le dossier temp' });
   }
 });
 module.exports = router;
