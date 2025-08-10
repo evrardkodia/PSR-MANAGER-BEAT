@@ -162,7 +162,6 @@ router.post('/prepare-main', async (req, res) => {
 });
 
 // --- Log de la structure de sections ---
-
 router.post('/prepare-all', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-all appelée');
   const { beatId } = req.body;
@@ -172,111 +171,102 @@ router.post('/prepare-all', async (req, res) => {
   }
 
   try {
-    // Récupérer beat dans la base
     const beat = await prisma.beat.findUnique({ where: { id: beatId } });
     if (!beat || !beat.url) {
       return res.status(404).json({ error: 'Beat ou URL introuvable' });
     }
 
-    // Téléchargement fichier .sty
     const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
     await downloadStyFromUrl(beat.url, inputStyPath);
+    console.log(`✅ Fichier .sty téléchargé : ${inputStyPath}`);
 
-    // Extraction full MIDI
     const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
     extractMidiFromSty(inputStyPath, fullMidPath);
+    console.log(`✅ MIDI brut extrait : ${fullMidPath}`);
 
-    // Lancer extract_sections.py pour lister sections
+    // Appel du script Python qui extrait toutes les sections en .mid dans TEMP_DIR
     const pyScript = path.join(SCRIPTS_DIR, 'extract_sections.py');
     const args = [pyScript, fullMidPath, TEMP_DIR];
     const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
     if (result.error) throw result.error;
-    if (result.stderr?.trim()) console.error('🐍 extract_sections.py stderr:', result.stderr.trim());
+
+    if (result.stderr?.trim()) {
+      console.error('🐍 extract_sections.py stderr:', result.stderr.trim());
+    }
+
     if (result.status !== 0) {
       throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
     }
 
-    console.log('🐍 extract_sections.py stdout:', result.stdout.trim());
+    if (!result.stdout) {
+      throw new Error("extract_sections.py n'a pas renvoyé de données JSON");
+    }
+
     const sectionsJson = JSON.parse(result.stdout.trim());
-    const sections = sectionsJson.sections || {};
+    console.log('🐍 extract_sections.py stdout:', sectionsJson);
 
-    // Helper : transforme "Main A" → "main_a"
-    function normalizeSectionName(name) {
-      return name.toLowerCase().replace(/\s+/g, '_');
-    }
+    // Map pour stocker les wav URLs
+    const wavUrls = {};
 
-    // Fonction pour générer un mid sectionné (synchrone)
-    function generateMidSection(sectionName) {
-      const outMid = path.join(TEMP_DIR, `${beatId}_${normalizeSectionName(sectionName)}.mid`);
-      // La commande python avec option --section et --output (à adapter si nécessaire)
-      const cmd = `python3 ${pyScript} --input "${fullMidPath}" --section "${sectionName}" --output "${outMid}"`;
-      const execResult = spawnSync(cmd, { shell: true, encoding: 'utf-8' });
-      if (execResult.error || execResult.status !== 0) {
-        console.warn(`⚠️ Erreur extraction MIDI section ${sectionName}:`, execResult.stderr || execResult.error);
-        return null;
+    // Fonction pour extraire une section midi + convertir en wav + couper (comme prepare-main)
+    function extractConvertTrim(sectionName, sectionLabel) {
+      const safeName = sectionName.replace(/ /g, '_');
+      const rawMidPath = path.join(TEMP_DIR, `${beatId}_${safeName}_raw.mid`);
+      const wavPath = path.join(TEMP_DIR, `${beatId}_${safeName}.wav`);
+
+      // Extrait section du fullMid (comme extractMainWithPython)
+      const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionLabel);
+      const duration = parseFloat(stdout.trim());
+
+      if (!fs.existsSync(rawMidPath)) {
+        throw new Error(`Fichier MIDI extrait manquant pour la section ${sectionName}`);
       }
-      return outMid;
+
+      convertMidToWav(rawMidPath, wavPath);
+
+      if (!fs.existsSync(wavPath)) {
+        throw new Error(`Fichier WAV manquant après conversion pour la section ${sectionName}`);
+      }
+
+      if (!isNaN(duration)) {
+        trimWavFile(wavPath, duration);
+      }
+
+      return `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`;
     }
 
-    // Fonction conversion mid → wav
-    function convertMidToWav(midPath) {
-      return new Promise((resolve, reject) => {
-        const wavPath = midPath.replace(/\.mid$/i, '.wav');
-        const cmd = `timidity "${midPath}" -Ow -o - | ffmpeg -y -i pipe: -ac 2 -ar 44100 "${wavPath}"`;
-        exec(cmd, (error) => {
-          if (error) {
-            console.warn(`⚠️ Erreur conversion WAV pour ${midPath}:`, error);
-            return reject(error);
-          }
-          resolve(wavPath);
-        });
-      });
-    }
+    // Parcours des sections extraites
+    for (const [sectionName, present] of Object.entries(sectionsJson.sections)) {
+      if (present === 1) {
+        // IMPORTANT: Adaptation casse frontend <-> backend : convertit sectionName pour extraction
+        // Par exemple : "Main A" -> "Main A" (exact), mais frontend envoie "main" ou "MAIN" => backend accepte "Main"
+        // Ici on utilise exactement la casse telle quelle pour l'extraction
 
-    // Générer tous les mid et wav pour sections actives
-    const generatedWavs = {};
-    for (const [sectionName, isActive] of Object.entries(sections)) {
-      if (isActive) {
-        const midFile = generateMidSection(sectionName);
-        if (midFile) {
-          try {
-            const wavFile = await convertMidToWav(midFile);
-            // Stockage url relative pour frontend (adapter selon static server)
-            generatedWavs[normalizeSectionName(sectionName)] = `/temp/${path.basename(wavFile)}`;
-          } catch {
-            // erreur déjà loggée dans convertMidToWav
-          }
+        try {
+          const wavUrl = extractConvertTrim(sectionName, sectionName);
+          wavUrls[sectionName.toLowerCase()] = wavUrl;
+          console.log(`✅ Section ${sectionName} traitée, WAV généré`);
+        } catch (e) {
+          console.warn(`⚠️ Erreur traitement section ${sectionName}:`, e.message);
+          wavUrls[sectionName.toLowerCase()] = null;
         }
+      } else {
+        wavUrls[sectionName.toLowerCase()] = null;
       }
     }
 
-    // Déterminer wavUrl par défaut = premier main_a, main_b, main_c, main_d dispo
-    const mainsOrder = ['main_a', 'main_b', 'main_c', 'main_d'];
-    let defaultWavUrl = null;
-    for (const m of mainsOrder) {
-      if (generatedWavs[m]) {
-        defaultWavUrl = generatedWavs[m];
-        break;
-      }
-    }
-
-    // Formater la liste sections avec clés normalisées (minuscules + underscore)
-    const normalizedSections = {};
-    for (const [key, val] of Object.entries(sections)) {
-      normalizedSections[normalizeSectionName(key)] = val;
-    }
-
-    // Retourner la réponse complète
     return res.json({
-      sections: normalizedSections,
-      wavUrl: defaultWavUrl,
+      sections: sectionsJson.sections,
+      wavUrls,
     });
+
   } catch (err) {
     console.error('❌ Erreur serveur (prepare-all) :', err);
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
+
 
 
 
