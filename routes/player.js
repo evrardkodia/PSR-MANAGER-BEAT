@@ -57,17 +57,26 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   const args = [pyScript, inputMidPath, outputMidPath, sectionName];
   const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
-  if (result.error) throw result.error;
+  if (result.error) {
+    console.error('❌ Erreur lors du spawn python:', result.error);
+    throw result.error;
+  }
+
   if (result.stdout?.trim()) {
     console.log('🐍 extract_main.py stdout:', result.stdout.trim());
-    // Loguer le JSON renvoyé par Python dans Render
-    fs.appendFileSync(path.join(__dirname, '..', 'python_debug.log'), `${result.stdout.trim()}\n`);
   }
-  if (result.stderr?.trim()) console.error('🐍 extract_main.py stderr:', result.stderr.trim());
-  if (result.status !== 0) throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
+
+  if (result.stderr?.trim()) {
+    console.error('🐍 extract_main.py stderr:', result.stderr.trim());
+  }
+
+  if (result.status !== 0) {
+    throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
+  }
 
   return result.stdout;
 }
+
 
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath);
@@ -179,17 +188,18 @@ router.post('/prepare-all', async (req, res) => {
     const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
     if (result.error) throw result.error;
+
     if (result.stdout?.trim()) {
-      // Loguer le JSON renvoyé par Python dans Render
-      const jsonOutput = result.stdout.trim();
-      console.log('🐍 extract_sections.py stdout:', jsonOutput);
-      
-      // Enregistrer dans python_debug.log pour le consulter dans Render
-      fs.appendFileSync(path.join(__dirname, '..', 'python_debug.log'), `${jsonOutput}\n`);
+      console.log('🐍 extract_sections.py stdout:', result.stdout.trim());
     }
 
-    if (result.stderr?.trim()) console.error('🐍 extract_sections.py stderr:', result.stderr.trim());
-    if (result.status !== 0) throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
+    if (result.stderr?.trim()) {
+      console.error('🐍 extract_sections.py stderr:', result.stderr.trim());
+    }
+
+    if (result.status !== 0) {
+      throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
+    }
 
     const sectionsJson = JSON.parse(result.stdout.trim());
     return res.json(sectionsJson);
@@ -199,6 +209,7 @@ router.post('/prepare-all', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
+
 
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;

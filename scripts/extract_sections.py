@@ -4,11 +4,13 @@ import sys
 import traceback
 import json
 
-DEBUG_LOG = os.path.join(os.path.dirname(__file__), 'python_debug.log')
+# Retirer la gestion du fichier de log DEBUG_LOG
+# DEBUG_LOG = os.path.join(os.path.dirname(__file__), 'python_debug.log')
 
-def log_debug(message):
-    with open(DEBUG_LOG, 'a', encoding='utf-8') as f:
-        f.write(message + '\n')
+# Retirer log_debug() car il ne sera plus nécessaire
+# def log_debug(message):
+#     with open(DEBUG_LOG, 'a', encoding='utf-8') as f:
+#         f.write(message + '\n')
 
 def extract_section(mid, section_name, next_section_name, output_path):
     try:
@@ -85,13 +87,11 @@ def extract_section(mid, section_name, next_section_name, output_path):
         return {section_name: 1}
 
     except Exception as e:
-        log_debug(traceback.format_exc())
+        # Plus de log dans un fichier, directement dans la sortie d'erreur
+        print("Erreur lors de l'extraction de la section:", traceback.format_exc(), file=sys.stderr)
         return {section_name: 0}
 
 def extract_all_sections(input_path, output_dir):
-    if os.path.exists(DEBUG_LOG):
-        os.remove(DEBUG_LOG)
-
     sections = [
         'Intro A', 'Intro B', 'Intro C', 'Intro D',
         'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
@@ -111,11 +111,13 @@ def extract_all_sections(input_path, output_dir):
 
             result["sections"].update(section_data)
 
-        return json.dumps(result)
+        # Retourner le JSON directement dans stdout
+        print(json.dumps(result))
 
     except Exception as e:
-        log_debug(traceback.format_exc())
-        return json.dumps({"error": f"Erreur générale : {str(e)}"})
+        # Retourner l'erreur dans la sortie d'erreur et l'afficher dans stdout
+        print(json.dumps({"error": f"Erreur générale : {str(e)}"}), file=sys.stderr)
+        print(json.dumps({"error": f"Erreur générale : {str(e)}"}))
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
@@ -128,4 +130,4 @@ if __name__ == "__main__":
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
 
-    print(extract_all_sections(input_mid, output_directory))
+    extract_all_sections(input_mid, output_directory)
