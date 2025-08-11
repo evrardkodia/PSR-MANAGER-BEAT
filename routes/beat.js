@@ -228,4 +228,17 @@ router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
   }
 });
 
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    const beats = await prisma.beat.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { user: { select: { username: true } } }
+    });
+    res.json({ beats });
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur serveur', details: err.message });
+  }
+});
+
+
 module.exports = router;
