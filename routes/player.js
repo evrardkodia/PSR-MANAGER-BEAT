@@ -184,7 +184,7 @@ router.post('/prepare-all', async (req, res) => {
     extractMidiFromSty(inputStyPath, fullMidPath);
     console.log(`✅ MIDI brut extrait : ${fullMidPath}`);
 
-    // Appel du script Python qui extrait toutes les sections en .mid dans TEMP_DIR
+    // Appel du script Python extract_sections.py pour détecter sections disponibles
     const pyScript = path.join(SCRIPTS_DIR, 'extract_sections.py');
     const args = [pyScript, fullMidPath, TEMP_DIR];
     const result = spawnSync('python3', args, { encoding: 'utf-8' });
@@ -204,62 +204,10 @@ router.post('/prepare-all', async (req, res) => {
     }
 
     const sectionsJson = JSON.parse(result.stdout.trim());
-    console.log('🐍 extract_sections.py stdout:', sectionsJson);
+    console.log('🐍 extract_sections.py stdout (sections trouvées) :', sectionsJson);
 
-    // Map pour stocker les wav URLs
-    const wavUrls = {};
-
-    // Fonction pour extraire une section midi + convertir en wav + couper (comme prepare-main)
-    function extractConvertTrim(sectionName, sectionLabel) {
-      const safeName = sectionName.replace(/ /g, '_');
-      const rawMidPath = path.join(TEMP_DIR, `${beatId}_${safeName}_raw.mid`);
-      const wavPath = path.join(TEMP_DIR, `${beatId}_${safeName}.wav`);
-
-      // Extrait section du fullMid (comme extractMainWithPython)
-      const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionLabel);
-      const duration = parseFloat(stdout.trim());
-
-      if (!fs.existsSync(rawMidPath)) {
-        throw new Error(`Fichier MIDI extrait manquant pour la section ${sectionName}`);
-      }
-
-      convertMidToWav(rawMidPath, wavPath);
-
-      if (!fs.existsSync(wavPath)) {
-        throw new Error(`Fichier WAV manquant après conversion pour la section ${sectionName}`);
-      }
-
-      if (!isNaN(duration)) {
-        trimWavFile(wavPath, duration);
-      }
-
-      return `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`;
-    }
-
-    // Parcours des sections extraites
-    for (const [sectionName, present] of Object.entries(sectionsJson.sections)) {
-      if (present === 1) {
-        // IMPORTANT: Adaptation casse frontend <-> backend : convertit sectionName pour extraction
-        // Par exemple : "Main A" -> "Main A" (exact), mais frontend envoie "main" ou "MAIN" => backend accepte "Main"
-        // Ici on utilise exactement la casse telle quelle pour l'extraction
-
-        try {
-          const wavUrl = extractConvertTrim(sectionName, sectionName);
-          wavUrls[sectionName.toLowerCase()] = wavUrl;
-          console.log(`✅ Section ${sectionName} traitée, WAV généré`);
-        } catch (e) {
-          console.warn(`⚠️ Erreur traitement section ${sectionName}:`, e.message);
-          wavUrls[sectionName.toLowerCase()] = null;
-        }
-      } else {
-        wavUrls[sectionName.toLowerCase()] = null;
-      }
-    }
-
-    return res.json({
-      sections: sectionsJson.sections,
-      wavUrls,
-    });
+    // Ici on ne génère pas de WAV, on retourne juste la structure détectée
+    return res.json({ sections: sectionsJson.sections });
 
   } catch (err) {
     console.error('❌ Erreur serveur (prepare-all) :', err);

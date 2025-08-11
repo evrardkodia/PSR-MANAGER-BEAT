@@ -1,17 +1,45 @@
-from mido import MidiFile, MidiTrack, Message
-import os
+from mido import MidiFile, MidiTrack, Message, MetaMessage
 import sys
+import os
 import traceback
-import json
 
-def extract_section(mid, section_name, next_section_name, output_path):
+# Fichier de log pour le debug
+DEBUG_LOG = os.path.join(os.path.dirname(__file__), 'python_debug.log')
+
+def log_debug(message):
+    with open(DEBUG_LOG, 'a', encoding='utf-8') as f:
+        f.write(message + '\n')
+
+def extract_section(input_path, output_path, section_name):
     try:
+        log_debug(f"Début extraction section '{section_name}' depuis {input_path}")
+
+        mid = MidiFile(input_path)
         ticks_per_beat = mid.ticks_per_beat
         out = MidiFile(ticks_per_beat=ticks_per_beat)
 
         start_tick = None
         end_tick = None
 
+        # Ordre logique étendu des sections Yamaha (Intro, Fill In, Main, Ending)
+        section_order = [
+            'Intro A', 'Intro B', 'Intro C', 'Intro D',
+            'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
+            'Main A', 'Main B', 'Main C', 'Main D',
+            'Ending A', 'Ending B', 'Ending C', 'Ending D'
+        ]
+
+        try:
+            index = section_order.index(section_name)
+        except ValueError:
+            err_msg = f"Erreur : section '{section_name}' non reconnue"
+            print(err_msg)
+            log_debug(err_msg)
+            return False, 0.0
+
+        next_section = section_order[index + 1] if index + 1 < len(section_order) else None
+
+        # Recherche des marqueurs de début et fin de section
         for track in mid.tracks:
             abs_time = 0
             for msg in track:
@@ -20,16 +48,23 @@ def extract_section(mid, section_name, next_section_name, output_path):
                     label = msg.text.strip()
                     if label == section_name and start_tick is None:
                         start_tick = abs_time
-                    elif label == next_section_name and start_tick is not None:
+                        log_debug(f"Début section trouvé à tick {start_tick}")
+                    elif label == next_section and start_tick is not None:
                         end_tick = abs_time
+                        log_debug(f"Fin section trouvé à tick {end_tick}")
                         break
 
         if start_tick is None:
-            return {section_name: 0}
+            err_msg = f"Erreur : section '{section_name}' non trouvée"
+            print(err_msg)
+            log_debug(err_msg)
+            return False, 0.0
 
         if end_tick is None:
-            end_tick = mid.length * ticks_per_beat * 2  # estimation large
+            end_tick = mid.length * ticks_per_beat * 2
+            log_debug(f"Aucune fin section trouvée, estimation à tick {end_tick}")
 
+        # Extraire les messages MIDI pour cette section
         for track in mid.tracks:
             new_track = MidiTrack()
             abs_time = 0
@@ -42,9 +77,9 @@ def extract_section(mid, section_name, next_section_name, output_path):
                 abs_time += msg.time
 
                 if abs_time <= start_tick and (
-                    msg.type in ['set_tempo', 'key_signature', 'time_signature'] or
+                    msg.type in ['set_tempo', 'key_signature', 'time_signature', 'smpte_offset'] or
                     (msg.type == 'control_change' and msg.control in [0, 32]) or
-                    msg.type in ['program_change', 'sysex']
+                    msg.type in ['program_change', 'pitchwheel', 'sysex']
                 ):
                     setup_msgs.append(msg.copy(time=msg.time))
 
@@ -62,7 +97,7 @@ def extract_section(mid, section_name, next_section_name, output_path):
 
                     if msg.type == 'note_on' and msg.velocity > 0:
                         pending_noteoffs[(msg.channel, msg.note)] = last_tick
-                    elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
+                    elif msg.type in ('note_off',) or (msg.type == 'note_on' and msg.velocity == 0):
                         pending_noteoffs.pop((msg.channel, msg.note), None)
 
                 elif abs_time > end_tick:
@@ -76,49 +111,36 @@ def extract_section(mid, section_name, next_section_name, output_path):
             out.tracks.append(new_track)
 
         out.save(output_path)
-        return {section_name: 1}
+        log_debug(f"Section extraite sauvegardée dans {output_path}")
 
-    except Exception:
-        print("Erreur lors de l'extraction de la section:", traceback.format_exc(), file=sys.stderr)
-        return {section_name: 0}
+        extracted = MidiFile(output_path)
+        duration = round(extracted.length, 3)
+        print(duration)
+        log_debug(f"Durée MIDI extraite : {duration}s")
 
-def extract_all_sections(input_path, output_dir):
-    sections = [
-        'Intro A', 'Intro B', 'Intro C', 'Intro D',
-        'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
-        'Main A', 'Main B', 'Main C', 'Main D',
-        'Ending A', 'Ending B', 'Ending C', 'Ending D'
-    ]
-
-    result = {"sections": {}}
-    
-    try:
-        mid = MidiFile(input_path)
-
-        for i, section in enumerate(sections):
-            next_section = sections[i + 1] if i + 1 < len(sections) else None
-            output_file = os.path.join(output_dir, f"{section.replace(' ', '_')}.mid")
-            section_data = extract_section(mid, section, next_section, output_file)
-
-            result["sections"].update(section_data)
-
-        # Affiche le JSON final dans stdout
-        print(json.dumps(result))
+        return True, duration
 
     except Exception as e:
-        err_json = json.dumps({"error": f"Erreur générale : {str(e)}"})
-        print(err_json, file=sys.stderr)
-        print(err_json)
+        err_text = f"Exception lors de l'extraction : {str(e)}\n{traceback.format_exc()}"
+        print(err_text)
+        log_debug(err_text)
+        return False, 0.0
+
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python extract_sections.py input.mid output_directory")
+    if os.path.exists(DEBUG_LOG):
+        os.remove(DEBUG_LOG)
+
+    if len(sys.argv) != 4:
+        usage = "Usage: python extract_main.py input.mid output.mid section_name"
+        print(usage)
+        log_debug(usage)
         sys.exit(1)
 
-    input_mid = sys.argv[1]
-    output_directory = sys.argv[2]
+    input_path = sys.argv[1]
+    output_path = sys.argv[2]
+    section_name = sys.argv[3]
 
-    if not os.path.exists(output_directory):
-        os.makedirs(output_directory)
-
-    extract_all_sections(input_mid, output_directory)
+    success, _ = extract_section(input_path, output_path, section_name)
+    if not success:
+        sys.exit(1)

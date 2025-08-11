@@ -9,6 +9,7 @@ def extract_section(mid, section_name, next_section_name, output_path):
         ticks_per_beat = mid.ticks_per_beat
         out = MidiFile(ticks_per_beat=ticks_per_beat)
 
+        # Trouver les ticks absolus de début et fin de section selon markers
         start_tick = None
         end_tick = None
 
@@ -16,7 +17,7 @@ def extract_section(mid, section_name, next_section_name, output_path):
             abs_time = 0
             for msg in track:
                 abs_time += msg.time
-                if msg.type == 'marker':
+                if msg.type == 'marker' and hasattr(msg, 'text'):
                     label = msg.text.strip()
                     if label == section_name and start_tick is None:
                         start_tick = abs_time
@@ -24,11 +25,18 @@ def extract_section(mid, section_name, next_section_name, output_path):
                         end_tick = abs_time
                         break
 
+            if end_tick is not None:
+                break  # On a trouvé fin, on peut sortir du loop
+
         if start_tick is None:
+            # Section non trouvée
             return {section_name: 0}
 
         if end_tick is None:
-            end_tick = mid.length * ticks_per_beat * 2  # estimation large
+            # Pas de marqueur fin, prend la longueur totale midi (en ticks)
+            # MidiFile length est en secondes, on convertit en ticks approximatif
+            estimated_length_ticks = int(mid.length * ticks_per_beat * 4)  # *4 pour marge large
+            end_tick = estimated_length_ticks
 
         for track in mid.tracks:
             new_track = MidiTrack()
@@ -41,15 +49,18 @@ def extract_section(mid, section_name, next_section_name, output_path):
             for msg in track:
                 abs_time += msg.time
 
-                if abs_time <= start_tick and (
+                # Messages setup avant section (tempo, signature, etc)
+                if not in_section and abs_time <= start_tick and (
                     msg.type in ['set_tempo', 'key_signature', 'time_signature'] or
                     (msg.type == 'control_change' and msg.control in [0, 32]) or
                     msg.type in ['program_change', 'sysex']
                 ):
                     setup_msgs.append(msg.copy(time=msg.time))
 
+                # Pendant section
                 if start_tick <= abs_time <= end_tick:
                     if not in_section:
+                        # Première fois dans section : injecter messages setup à time=0
                         for sm in setup_msgs:
                             sm.time = 0
                             new_track.append(sm)
@@ -60,6 +71,7 @@ def extract_section(mid, section_name, next_section_name, output_path):
                     new_track.append(msg.copy(time=delta))
                     last_tick = abs_time
 
+                    # Suivi note_on/note_off pour fermeture correcte
                     if msg.type == 'note_on' and msg.velocity > 0:
                         pending_noteoffs[(msg.channel, msg.note)] = last_tick
                     elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
@@ -68,6 +80,7 @@ def extract_section(mid, section_name, next_section_name, output_path):
                 elif abs_time > end_tick:
                     break
 
+            # Fermer toutes les notes ouvertes à la fin de la section
             for (ch, note), t in pending_noteoffs.items():
                 delta = end_tick - last_tick
                 new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
@@ -91,7 +104,7 @@ def extract_all_sections(input_path, output_dir):
     ]
 
     result = {"sections": {}}
-    
+
     try:
         mid = MidiFile(input_path)
 
@@ -99,10 +112,8 @@ def extract_all_sections(input_path, output_dir):
             next_section = sections[i + 1] if i + 1 < len(sections) else None
             output_file = os.path.join(output_dir, f"{section.replace(' ', '_')}.mid")
             section_data = extract_section(mid, section, next_section, output_file)
-
             result["sections"].update(section_data)
 
-        # Affiche le JSON final dans stdout
         print(json.dumps(result))
 
     except Exception as e:
