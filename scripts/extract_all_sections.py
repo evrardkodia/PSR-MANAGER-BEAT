@@ -1,10 +1,8 @@
-from mido import MidiFile, MidiTrack, Message
-import os
 import sys
+import os
+import json
 import traceback
-
-def log(msg):
-    print(msg, flush=True)  # flush=True pour que ça s'affiche tout de suite
+from mido import MidiFile, MidiTrack, Message
 
 def extract_section(mid, section_name, next_section_name, output_path):
     try:
@@ -29,12 +27,11 @@ def extract_section(mid, section_name, next_section_name, output_path):
                 break
 
         if start_tick is None:
-            log(f"[WARN] Section '{section_name}' non trouvée dans le fichier MIDI.")
-            return False
+            return {section_name: 0}
 
         if end_tick is None:
-            # Prendre une valeur après la fin (marge large)
-            end_tick = int(mid.length * ticks_per_beat * 4)
+            estimated_length_ticks = int(mid.length * ticks_per_beat * 4)
+            end_tick = estimated_length_ticks
 
         for track in mid.tracks:
             new_track = MidiTrack()
@@ -46,7 +43,6 @@ def extract_section(mid, section_name, next_section_name, output_path):
 
             for msg in track:
                 abs_time += msg.time
-
                 if not in_section and abs_time <= start_tick and (
                     msg.type in ['set_tempo', 'key_signature', 'time_signature'] or
                     (msg.type == 'control_change' and msg.control in [0, 32]) or
@@ -74,7 +70,6 @@ def extract_section(mid, section_name, next_section_name, output_path):
                 elif abs_time > end_tick:
                     break
 
-            # Fermer notes ouvertes
             for (ch, note), t in pending_noteoffs.items():
                 delta = end_tick - last_tick
                 new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
@@ -83,14 +78,12 @@ def extract_section(mid, section_name, next_section_name, output_path):
             out.tracks.append(new_track)
 
         out.save(output_path)
-        log(f"[OK] Section '{section_name}' extraite vers '{output_path}'.")
-        return True
-
+        return {section_name: 1}
     except Exception:
-        log(f"[ERREUR] Extraction section '{section_name}' échouée:\n{traceback.format_exc()}")
-        return False
+        print("Erreur dans extract_section:", traceback.format_exc(), file=sys.stderr)
+        return {section_name: 0}
 
-def extract_all_sections(input_mid_path, output_dir):
+def extract_all_sections(input_path, output_dir):
     sections = [
         'Intro A', 'Intro B', 'Intro C', 'Intro D',
         'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
@@ -98,29 +91,35 @@ def extract_all_sections(input_mid_path, output_dir):
         'Ending A', 'Ending B', 'Ending C', 'Ending D'
     ]
 
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    result = {"sections": {}}
 
-    mid = MidiFile(input_mid_path)
+    try:
+        mid = MidiFile(input_path)
 
-    log(f"Début extraction de toutes les sections depuis '{input_mid_path}' vers '{output_dir}'.")
+        for i, section in enumerate(sections):
+            next_section = sections[i + 1] if i + 1 < len(sections) else None
+            filename = section.replace(' ', '_') + '.mid'
+            output_file = os.path.join(output_dir, filename)
+            section_result = extract_section(mid, section, next_section, output_file)
+            result["sections"].update(section_result)
 
-    for i, section in enumerate(sections):
-        next_section = sections[i + 1] if i + 1 < len(sections) else None
-        filename = f"{section.replace(' ', '_')}.mid"
-        output_path = os.path.join(output_dir, filename)
-        success = extract_section(mid, section, next_section, output_path)
-        if not success:
-            log(f"[WARN] Section '{section}' non extraite.")
+        # Afficher le JSON dans la console (stdout) uniquement
+        print(json.dumps(result, ensure_ascii=False))
 
-    log("Extraction terminée.")
+    except Exception as e:
+        err_json = json.dumps({"error": f"Erreur générale : {str(e)}"})
+        print(err_json, file=sys.stderr)
+        print(err_json)
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        print("Usage: python extract_all_sections.py input_full.mid output_directory")
+        print("Usage: python3 extract_all_sections.py input_full.mid output_dir")
         sys.exit(1)
 
-    input_mid = sys.argv[1]
+    input_full_mid = sys.argv[1]
     output_dir = sys.argv[2]
 
-    extract_all_sections(input_mid, output_dir)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    extract_all_sections(input_full_mid, output_dir)
