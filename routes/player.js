@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const fetch = require('node-fetch');
-const { spawnSync } = require('child_process');
+const { spawnSync, execSync } = require('child_process');
 const { PrismaClient } = require('@prisma/client');
 
 const router = express.Router();
