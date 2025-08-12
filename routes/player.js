@@ -312,7 +312,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     extractMidiFromSty(inputStyPath, fullMidPath);
 
     // Utilisation de extract_sections.py pour extraire toutes les sections
-    const pythonScript = path.join(__dirname, '../scripts/extract_sections.py');
+    const pythonScript = path.join(__dirname, '../scripts/extract_all_sections.py');
 
     const execSync = require('child_process').execSync;
 
