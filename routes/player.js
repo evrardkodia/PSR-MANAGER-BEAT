@@ -316,15 +316,15 @@ router.post('/prepare-all-sections', async (req, res) => {
     // Appel du script avec 2 arguments seulement
     const command = `python3 ${pythonScript} "${fullMidPath}" "${TEMP_DIR}"`;
     const stdout = execSync(command, { encoding: 'utf-8' });
+    console.log('DEBUG stdout:', stdout);
 
-    // JSON stringifié dans la console python → parse ici
     const sectionsJson = JSON.parse(stdout.trim());
 
-    // sectionsJson = [ { sectionName: "Main A", midFilename: "8_Main_A.mid" }, ... ]
+    const sectionsArray = sectionsJson.sections || [];
 
     const sectionsWithWav = [];
 
-    for (const section of sectionsJson) {
+    for (const section of sectionsArray) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
       const wavPath = midPath.replace('.mid', '.wav');
 
@@ -344,6 +344,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
+
 
 
 module.exports = router;
