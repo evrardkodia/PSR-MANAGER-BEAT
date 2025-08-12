@@ -68,6 +68,8 @@ def extract_section(mid, section_name, next_section_name, output_path):
                         last_tick = start_tick
 
                     delta = abs_time - last_tick
+                    # mido exige que time soit int, on s'assure ici
+                    delta = int(round(delta))
                     new_track.append(msg.copy(time=delta))
                     last_tick = abs_time
 
@@ -83,6 +85,7 @@ def extract_section(mid, section_name, next_section_name, output_path):
             # Fermer toutes les notes ouvertes à la fin de la section
             for (ch, note), t in pending_noteoffs.items():
                 delta = end_tick - last_tick
+                delta = int(round(delta))
                 new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
                 last_tick = end_tick
 
@@ -95,7 +98,7 @@ def extract_section(mid, section_name, next_section_name, output_path):
         print("Erreur lors de l'extraction de la section:", traceback.format_exc(), file=sys.stderr)
         return {section_name: 0}
 
-def extract_all_sections(input_path, output_dir):
+def extract_all_sections(input_path, output_dir, output_json_path):
     sections = [
         'Intro A', 'Intro B', 'Intro C', 'Intro D',
         'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
@@ -110,26 +113,30 @@ def extract_all_sections(input_path, output_dir):
 
         for i, section in enumerate(sections):
             next_section = sections[i + 1] if i + 1 < len(sections) else None
-            output_file = os.path.join(output_dir, f"{section.replace(' ', '_')}.mid")
+            filename = f"{section.replace(' ', '_')}.mid"
+            output_file = os.path.join(output_dir, filename)
             section_data = extract_section(mid, section, next_section, output_file)
             result["sections"].update(section_data)
 
-        print(json.dumps(result))
+        # Écrire le JSON dans un fichier
+        with open(output_json_path, 'w', encoding='utf-8') as f:
+            json.dump(result, f)
 
     except Exception as e:
-        err_json = json.dumps({"error": f"Erreur générale : {str(e)}"})
-        print(err_json, file=sys.stderr)
-        print(err_json)
+        err_json = {"error": f"Erreur générale : {str(e)}"}
+        with open(output_json_path, 'w', encoding='utf-8') as f:
+            json.dump(err_json, f)
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python extract_sections.py input.mid output_directory")
+    if len(sys.argv) != 4:
+        print("Usage: python extract_sections.py input.mid output_directory output_json_path")
         sys.exit(1)
 
     input_mid = sys.argv[1]
     output_directory = sys.argv[2]
+    output_json_path = sys.argv[3]
 
     if not os.path.exists(output_directory):
         os.makedirs(output_directory)
 
-    extract_all_sections(input_mid, output_directory)
+    extract_all_sections(input_mid, output_directory, output_json_path)

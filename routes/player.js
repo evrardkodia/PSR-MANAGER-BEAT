@@ -290,4 +290,65 @@ router.get('/list-temps', async (req, res) => {
     res.status(500).json({ error: 'Impossible de lire le dossier temp' });
   }
 });
+
+router.post('/prepare-all-sections', async (req, res) => {
+  console.log('➡️ POST /api/player/prepare-all-sections appelée');
+  const { beatId } = req.body;
+
+  if (!beatId) {
+    return res.status(400).json({ error: 'beatId est requis' });
+  }
+
+  try {
+    const beat = await prisma.beat.findUnique({ where: { id: beatId } });
+    if (!beat || !beat.url) {
+      return res.status(404).json({ error: 'Beat ou URL introuvable' });
+    }
+
+    const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
+    await downloadStyFromUrl(beat.url, inputStyPath);
+
+    const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
+    extractMidiFromSty(inputStyPath, fullMidPath);
+
+    // Utilisation de extract_sections.py pour extraire toutes les sections
+    const pythonScript = path.join(__dirname, '../scripts/extract_sections.py');
+
+    const execSync = require('child_process').execSync;
+
+    // Appel de python script (qui extrait toutes sections et génère un JSON output)
+    const jsonOutputPath = path.join(TEMP_DIR, `${beatId}_sections.json`);
+    execSync(`python3 ${pythonScript} ${fullMidPath} ${TEMP_DIR} ${jsonOutputPath}`);
+
+    // Lecture du JSON contenant les sections extraites
+    const sectionsJson = JSON.parse(fs.readFileSync(jsonOutputPath, 'utf-8'));
+
+    // sectionsJson est censé être une liste d'objets avec { sectionName, midFilename }
+    // Exemple : [ { sectionName: "Main A", midFilename: "123_Main_A.mid" }, ... ]
+
+    // Convertir chaque .mid en .wav
+    const sectionsWithWav = [];
+
+    for (const section of sectionsJson) {
+      const midPath = path.join(TEMP_DIR, section.midFilename);
+      const wavPath = midPath.replace('.mid', '.wav');
+
+      convertMidToWav(midPath, wavPath);
+
+      // vérifier que le wav existe bien avant d’ajouter
+      if (fs.existsSync(wavPath)) {
+        sectionsWithWav.push({
+          section: section.sectionName,
+          wavUrl: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`,
+        });
+      }
+    }
+
+    return res.json({ sections: sectionsWithWav });
+  } catch (err) {
+    console.error('❌ Erreur serveur (prepare-all-sections) :', err);
+    return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
+  }
+});
+
 module.exports = router;
