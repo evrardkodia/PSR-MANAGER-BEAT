@@ -311,32 +311,23 @@ router.post('/prepare-all-sections', async (req, res) => {
     const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
     extractMidiFromSty(inputStyPath, fullMidPath);
 
-    // Appel du script Python extract_all_sections.py
-    const pythonScript = path.join(SCRIPTS_DIR, 'extract_all_sections.py');
+    const pythonScript = path.join(__dirname, '../scripts/extract_all_sections.py');
 
-    // Le fichier JSON est utilisé uniquement comme chemin, ton script n'écrit plus dedans ? 
-    // On le passe quand même car la signature semble demander 3 arguments
-    const jsonOutputPath = path.join(TEMP_DIR, `${beatId}_sections.json`);
+    // Appel du script avec 2 arguments seulement
+    const command = `python3 ${pythonScript} "${fullMidPath}" "${TEMP_DIR}"`;
+    const stdout = execSync(command, { encoding: 'utf-8' });
 
-    const command = `python3 ${pythonScript} ${fullMidPath} ${TEMP_DIR} ${jsonOutputPath}`;
-    console.log(`🔧 Exécution script Python : ${command}`);
+    // JSON stringifié dans la console python → parse ici
+    const sectionsJson = JSON.parse(stdout.trim());
 
-    execSync(command, { encoding: 'utf-8' });
-
-    // Lecture du JSON généré (ou stdout selon ce que fait ton script)
-    const rawJson = fs.readFileSync(jsonOutputPath, 'utf-8');
-    console.log('🐍 Contenu JSON sections:', rawJson);
-
-    const sectionsJson = JSON.parse(rawJson);
-    const sectionsArray = sectionsJson.sections || [];
+    // sectionsJson = [ { sectionName: "Main A", midFilename: "8_Main_A.mid" }, ... ]
 
     const sectionsWithWav = [];
 
-    for (const section of sectionsArray) {
+    for (const section of sectionsJson) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
       const wavPath = midPath.replace('.mid', '.wav');
 
-      console.log(`🎹 Conversion section ${section.sectionName} : ${midPath} → ${wavPath}`);
       convertMidToWav(midPath, wavPath);
 
       if (fs.existsSync(wavPath)) {
@@ -344,8 +335,6 @@ router.post('/prepare-all-sections', async (req, res) => {
           section: section.sectionName,
           wavUrl: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`,
         });
-      } else {
-        console.warn(`⚠️ WAV non trouvé après conversion : ${wavPath}`);
       }
     }
 
@@ -355,7 +344,6 @@ router.post('/prepare-all-sections', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
-
 
 
 module.exports = router;
