@@ -313,13 +313,13 @@ router.post('/prepare-all-sections', async (req, res) => {
 
     const pythonScript = path.join(__dirname, '../scripts/extract_all_sections.py');
 
-    // Appel du script avec 2 arguments seulement
+    // Appel du script Python avec 2 arguments : fichier midi complet + dossier temporaire
     const command = `python3 ${pythonScript} "${fullMidPath}" "${TEMP_DIR}"`;
     const stdout = execSync(command, { encoding: 'utf-8' });
     console.log('DEBUG stdout:', stdout);
 
+    // Parse le JSON renvoyé par le script Python
     const sectionsJson = JSON.parse(stdout.trim());
-
     const sectionsArray = sectionsJson.sections || [];
 
     const sectionsWithWav = [];
@@ -328,11 +328,15 @@ router.post('/prepare-all-sections', async (req, res) => {
       const midPath = path.join(TEMP_DIR, section.midFilename);
       const wavPath = midPath.replace('.mid', '.wav');
 
+      // Convertir le fichier MIDI en WAV
       convertMidToWav(midPath, wavPath);
 
+      // Vérifier si le fichier WAV existe avant d'ajouter à la réponse
       if (fs.existsSync(wavPath)) {
         sectionsWithWav.push({
           section: section.sectionName,
+          midFilename: section.midFilename,
+          midiUrl: section.url,
           wavUrl: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`,
         });
       }

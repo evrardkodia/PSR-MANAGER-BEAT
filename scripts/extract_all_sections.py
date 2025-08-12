@@ -4,6 +4,8 @@ import json
 import traceback
 from mido import MidiFile, MidiTrack, Message
 
+BASE_URL = "https://psr-manager-beat.onrender.com/temp"
+
 def extract_section(mid, section_name, next_section_name, output_path):
     try:
         ticks_per_beat = mid.ticks_per_beat
@@ -91,19 +93,28 @@ def extract_all_sections(input_path, output_dir):
         'Ending A', 'Ending B', 'Ending C', 'Ending D'
     ]
 
-    result = {"sections": {}}
+    result = {"sections": []}
 
     try:
         mid = MidiFile(input_path)
 
+        # Extraire beatId à partir du nom de fichier input (ex: 9_full.mid -> 9)
+        basename = os.path.basename(input_path)
+        beat_id = basename.split('_')[0] if '_' in basename else 'unknown'
+
         for i, section in enumerate(sections):
             next_section = sections[i + 1] if i + 1 < len(sections) else None
-            filename = section.replace(' ', '_') + '.mid'
+            # Nom fichier MIDI avec beatId en préfixe et underscores au lieu d'espaces
+            filename = f"{beat_id}_{section.replace(' ', '_')}.mid"
             output_file = os.path.join(output_dir, filename)
             section_result = extract_section(mid, section, next_section, output_file)
-            result["sections"].update(section_result)
+            if section_result.get(section) == 1:
+                result["sections"].append({
+                    "sectionName": section,
+                    "midFilename": filename,
+                    "url": f"{BASE_URL}/{filename}"
+                })
 
-        # Afficher le JSON dans la console (stdout) uniquement
         print(json.dumps(result, ensure_ascii=False))
 
     except Exception as e:
