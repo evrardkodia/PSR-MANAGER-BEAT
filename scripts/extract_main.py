@@ -21,7 +21,7 @@ def extract_section(input_path, output_path, section_name):
         start_tick = None
         end_tick = None
 
-        # Ordre logique étendu des sections Yamaha (Intro, Fill In, Main, Ending)
+        # Ordre logique étendu des sections Yamaha
         section_order = [
             'Intro A', 'Intro B', 'Intro C', 'Intro D',
             'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
@@ -61,7 +61,7 @@ def extract_section(input_path, output_path, section_name):
             return False, 0.0
 
         if end_tick is None:
-            end_tick = mid.length * ticks_per_beat * 2
+            end_tick = int(mid.length * ticks_per_beat * 2)
             log_debug(f"Aucune fin section trouvée, estimation à tick {end_tick}")
 
         # Extraire les messages MIDI pour cette section
@@ -76,22 +76,24 @@ def extract_section(input_path, output_path, section_name):
             for msg in track:
                 abs_time += msg.time
 
+                # Sauvegarde des messages setup avant la section
                 if abs_time <= start_tick and (
                     msg.type in ['set_tempo', 'key_signature', 'time_signature', 'smpte_offset'] or
                     (msg.type == 'control_change' and msg.control in [0, 32]) or
                     msg.type in ['program_change', 'pitchwheel', 'sysex']
                 ):
-                    setup_msgs.append(msg.copy(time=msg.time))
+                    setup_msgs.append(msg.copy(time=int(msg.time)))
 
                 if start_tick <= abs_time <= end_tick:
                     if not in_section:
+                        # Ajout des messages setup au début de la section
                         for sm in setup_msgs:
                             sm.time = 0
-                            new_track.append(sm)
+                            new_track.append(sm.copy(time=0))
                         in_section = True
                         last_tick = start_tick
 
-                    delta = abs_time - last_tick
+                    delta = int(abs_time - last_tick)
                     new_track.append(msg.copy(time=delta))
                     last_tick = abs_time
 
@@ -103,8 +105,9 @@ def extract_section(input_path, output_path, section_name):
                 elif abs_time > end_tick:
                     break
 
+            # Ajouter les note_off manquants à la fin
             for (ch, note), t in pending_noteoffs.items():
-                delta = end_tick - last_tick
+                delta = int(end_tick - last_tick)
                 new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
                 last_tick = end_tick
 
