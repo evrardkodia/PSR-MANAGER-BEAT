@@ -311,22 +311,17 @@ router.post('/prepare-all-sections', async (req, res) => {
     const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
     extractMidiFromSty(inputStyPath, fullMidPath);
 
-    // Utilisation de extract_sections.py pour extraire toutes les sections
     const pythonScript = path.join(__dirname, '../scripts/extract_all_sections.py');
 
-    const execSync = require('child_process').execSync;
+    // Appel du script avec 2 arguments seulement
+    const command = `python3 ${pythonScript} "${fullMidPath}" "${TEMP_DIR}"`;
+    const stdout = execSync(command, { encoding: 'utf-8' });
 
-    // Appel de python script (qui extrait toutes sections et génère un JSON output)
-    const jsonOutputPath = path.join(TEMP_DIR, `${beatId}_sections.json`);
-    execSync(`python3 ${pythonScript} ${fullMidPath} ${TEMP_DIR} ${jsonOutputPath}`);
+    // JSON stringifié dans la console python → parse ici
+    const sectionsJson = JSON.parse(stdout.trim());
 
-    // Lecture du JSON contenant les sections extraites
-    const sectionsJson = JSON.parse(fs.readFileSync(jsonOutputPath, 'utf-8'));
+    // sectionsJson = [ { sectionName: "Main A", midFilename: "8_Main_A.mid" }, ... ]
 
-    // sectionsJson est censé être une liste d'objets avec { sectionName, midFilename }
-    // Exemple : [ { sectionName: "Main A", midFilename: "123_Main_A.mid" }, ... ]
-
-    // Convertir chaque .mid en .wav
     const sectionsWithWav = [];
 
     for (const section of sectionsJson) {
@@ -335,7 +330,6 @@ router.post('/prepare-all-sections', async (req, res) => {
 
       convertMidToWav(midPath, wavPath);
 
-      // vérifier que le wav existe bien avant d’ajouter
       if (fs.existsSync(wavPath)) {
         sectionsWithWav.push({
           section: section.sectionName,
@@ -350,5 +344,6 @@ router.post('/prepare-all-sections', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
+
 
 module.exports = router;
