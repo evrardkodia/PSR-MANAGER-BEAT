@@ -8,6 +8,7 @@ const { PrismaClient } = require('@prisma/client');
 const router = express.Router();
 const prisma = new PrismaClient();
 
+
 console.log("🚀 routes/player.js chargé");
 
 // Chemins
@@ -15,6 +16,7 @@ const TIMIDITY_EXE = 'timidity';
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts');
+const FFPROBE_EXE = 'ffprobe';
 
 // Utilise la variable d'environnement FFMPEG_PATH ou 'ffmpeg' par défaut
 const FFMPEG_EXE = process.env.FFMPEG_PATH || 'ffmpeg';
