@@ -4,7 +4,7 @@ const fs = require('fs');
 const fetch = require('node-fetch');
 const { spawnSync, execSync } = require('child_process');
 const { PrismaClient } = require('@prisma/client');
-
+const { spawn } = require('child_process');
 const router = express.Router();
 const prisma = new PrismaClient();
 
@@ -70,17 +70,26 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   return result.stdout;
 }
 
-function convertMidToWav(midPath, wavPath) {
-  console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath);
-  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
-  const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
 
-  if (convertProcess.error) throw convertProcess.error;
-  if (convertProcess.status !== 0) {
-    console.error('❌ Timidity stderr:', convertProcess.stderr);
-    throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
-  }
-  console.log('✅ Conversion MIDI → WAV terminée');
+function convertMidToWavAsync(midPath, wavPath) {
+  return new Promise((resolve, reject) => {
+    const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
+    const proc = spawn(TIMIDITY_EXE, args);
+
+    proc.on('error', (err) => reject(err));
+    proc.stderr.on('data', (data) => {
+      console.error('timidity stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        console.log(`✅ Conversion MIDI → WAV terminée : ${wavPath}`);
+        resolve();
+      } else {
+        reject(new Error(`Timidity a échoué avec le code ${code}`));
+      }
+    });
+  });
 }
 
 function trimWavFile(wavPath, duration) {
@@ -305,19 +314,17 @@ router.post('/prepare-all-sections', async (req, res) => {
     const stdout = execSync(command, { encoding: 'utf-8' });
     console.log('DEBUG stdout:', stdout);
 
-    // JSON émis par le script Python (déjà au bon format sections:[{sectionName,midFilename,url}])
     const pyJson = JSON.parse(stdout.trim());
     const baseUrl = publicBaseUrl(req);
 
     const sectionsArray = Array.isArray(pyJson.sections) ? pyJson.sections : [];
-    const sectionsWithWav = [];
 
-    for (const section of sectionsArray) {
+    // Conversion MIDI->WAV en parallèle
+    const conversionPromises = sectionsArray.map(async (section) => {
       const midPath = path.join(TEMP_DIR, section.midFilename);
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
-      // Convertir MIDI -> WAV
-      convertMidToWav(midPath, wavPath);
+      await convertMidToWavAsync(midPath, wavPath);
 
       if (fs.existsSync(wavPath)) {
         const durationSec = getWavDurationSec(wavPath);
@@ -326,19 +333,21 @@ router.post('/prepare-all-sections', async (req, res) => {
         const isIntro = /^Intro\s+[ABCD]$/i.test(section.sectionName);
         const isEnding = /^Ending\s+[ABCD]$/i.test(section.sectionName);
 
-        sectionsWithWav.push({
+        return {
           section: section.sectionName,
-          loop: !!isMain,                   // loop uniquement pour Main
+          loop: !!isMain,
           oneShot: !!(isFill || isIntro || isEnding),
           midFilename: section.midFilename,
-          midiUrl: `${baseUrl}/temp/${path.basename(section.midFilename)}`, // remplace l'URL Python par PUBLIC_URL si besoin
+          midiUrl: `${baseUrl}/temp/${path.basename(section.midFilename)}`,
           wavUrl: `${baseUrl}/temp/${path.basename(wavPath)}`,
-          durationSec: durationSec
-        });
+          durationSec
+        };
       }
-    }
+      return null;
+    });
 
-    // Mapping des transitions Fill par défaut (Main X -> Fill In XX)
+    const sectionsWithWav = (await Promise.all(conversionPromises)).filter(Boolean);
+
     const fillMap = {
       'Main A': 'Fill In AA',
       'Main B': 'Fill In BB',
@@ -346,10 +355,9 @@ router.post('/prepare-all-sections', async (req, res) => {
       'Main D': 'Fill In DD'
     };
 
-    // Manifest complet pour séquenceur front
     const manifest = {
       beatId,
-      tempoFactorDefault: 1.0, // le front peut le modifier dynamiquement
+      tempoFactorDefault: 1.0,
       sections: sectionsWithWav,
       fillMap
     };
@@ -360,6 +368,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
+
 
 // --- NOUVEAU : endpoint manifest simple en GET (pratique pour (re)charger côté front) ---
 router.get('/sequencer-manifest', async (req, res) => {
