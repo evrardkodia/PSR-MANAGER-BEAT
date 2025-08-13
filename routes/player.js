@@ -61,22 +61,12 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
     console.error('❌ Erreur lors du spawn python:', result.error);
     throw result.error;
   }
-
-  if (result.stdout?.trim()) {
-    console.log('🐍 extract_main.py stdout:', result.stdout.trim());
-  }
-
-  if (result.stderr?.trim()) {
-    console.error('🐍 extract_main.py stderr:', result.stderr.trim());
-  }
-
-  if (result.status !== 0) {
-    throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
-  }
+  if (result.stdout?.trim()) console.log('🐍 extract_main.py stdout:', result.stdout.trim());
+  if (result.stderr?.trim()) console.error('🐍 extract_main.py stderr:', result.stderr.trim());
+  if (result.status !== 0) throw new Error(`extract_main.py a échoué avec le code ${result.status}`);
 
   return result.stdout;
 }
-
 
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath);
@@ -109,7 +99,20 @@ function trimWavFile(wavPath, duration) {
   console.log('🔪 WAV rogné à', duration, 'secondes');
 }
 
-// Routes
+// --- Durée d’un WAV (pour planifier sans blanc) ---
+function getWavDurationSec(wavPath) {
+  // utilise ffprobe via ffmpeg binaire
+  try {
+    const out = execSync(`${FFMPEG_EXE} -v error -show_entries format=duration -of default=nw=1:nk=1 -i "${wavPath}"`, { encoding: 'utf-8' });
+    const val = parseFloat(String(out).trim());
+    return isNaN(val) ? null : val;
+  } catch (e) {
+    console.warn('⚠️ Impossible de lire la durée via ffprobe:', e.message);
+    return null;
+  }
+}
+
+// --- Routes ---
 
 router.post('/prepare-main', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-main appelée');
@@ -184,39 +187,24 @@ router.post('/prepare-all', async (req, res) => {
     extractMidiFromSty(inputStyPath, fullMidPath);
     console.log(`✅ MIDI brut extrait : ${fullMidPath}`);
 
-    // Appel du script Python extract_sections.py pour détecter sections disponibles
     const pyScript = path.join(SCRIPTS_DIR, 'extract_sections.py');
     const args = [pyScript, fullMidPath, TEMP_DIR];
     const result = spawnSync('python3', args, { encoding: 'utf-8' });
 
     if (result.error) throw result.error;
-
-    if (result.stderr?.trim()) {
-      console.error('🐍 extract_sections.py stderr:', result.stderr.trim());
-    }
-
-    if (result.status !== 0) {
-      throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
-    }
-
-    if (!result.stdout) {
-      throw new Error("extract_sections.py n'a pas renvoyé de données JSON");
-    }
+    if (result.stderr?.trim()) console.error('🐍 extract_sections.py stderr:', result.stderr.trim());
+    if (result.status !== 0) throw new Error(`extract_sections.py a échoué avec le code ${result.status}`);
+    if (!result.stdout) throw new Error("extract_sections.py n'a pas renvoyé de données JSON");
 
     const sectionsJson = JSON.parse(result.stdout.trim());
     console.log('🐍 extract_sections.py stdout (sections trouvées) :', sectionsJson);
 
-    // Ici on ne génère pas de WAV, on retourne juste la structure détectée
     return res.json({ sections: sectionsJson.sections });
-
   } catch (err) {
     console.error('❌ Erreur serveur (prepare-all) :', err);
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
-
-
-
 
 router.post('/play-section', (req, res) => {
   const { beatId, mainLetter } = req.body;
@@ -282,8 +270,6 @@ router.post('/cleanup', async (req, res) => {
 router.get('/list-temps', async (req, res) => {
   try {
     const files = await fs.promises.readdir(TEMP_DIR);
-    // Optionnel: filtre les fichiers audio/midi ou retourne tout
-    // const filteredFiles = files.filter(f => /\.(wav|mid|midi)$/i.test(f));
     res.json({ files });
   } catch (err) {
     console.error('❌ Erreur lecture dossier temp:', err);
@@ -291,6 +277,7 @@ router.get('/list-temps', async (req, res) => {
   }
 });
 
+// --- NOUVEAU : préparation + manifest séquenceur (gapless & transitions) ---
 router.post('/prepare-all-sections', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-all-sections appelée');
   const { beatId } = req.body;
@@ -312,43 +299,129 @@ router.post('/prepare-all-sections', async (req, res) => {
     extractMidiFromSty(inputStyPath, fullMidPath);
 
     const pythonScript = path.join(__dirname, '../scripts/extract_all_sections.py');
-
-    // Appel du script Python avec 2 arguments : fichier midi complet + dossier temporaire
     const command = `python3 ${pythonScript} "${fullMidPath}" "${TEMP_DIR}"`;
     const stdout = execSync(command, { encoding: 'utf-8' });
     console.log('DEBUG stdout:', stdout);
 
-    // Parse le JSON renvoyé par le script Python
-    const sectionsJson = JSON.parse(stdout.trim());
-    const sectionsArray = sectionsJson.sections || [];
+    // JSON émis par le script Python (déjà au bon format sections:[{sectionName,midFilename,url}])
+    const pyJson = JSON.parse(stdout.trim());
+    const baseUrl = publicBaseUrl(req);
 
+    const sectionsArray = Array.isArray(pyJson.sections) ? pyJson.sections : [];
     const sectionsWithWav = [];
 
     for (const section of sectionsArray) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
-      const wavPath = midPath.replace('.mid', '.wav');
+      const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
-      // Convertir le fichier MIDI en WAV
+      // Convertir MIDI -> WAV
       convertMidToWav(midPath, wavPath);
 
-      // Vérifier si le fichier WAV existe avant d'ajouter à la réponse
       if (fs.existsSync(wavPath)) {
+        const durationSec = getWavDurationSec(wavPath);
+        const isMain = /^Main\s+[ABCD]$/i.test(section.sectionName);
+        const isFill = /^Fill In\s+[ABCD]{2}$/i.test(section.sectionName);
+        const isIntro = /^Intro\s+[ABCD]$/i.test(section.sectionName);
+        const isEnding = /^Ending\s+[ABCD]$/i.test(section.sectionName);
+
         sectionsWithWav.push({
           section: section.sectionName,
+          loop: !!isMain,                   // loop uniquement pour Main
+          oneShot: !!(isFill || isIntro || isEnding),
           midFilename: section.midFilename,
-          midiUrl: section.url,
-          wavUrl: `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`,
+          midiUrl: `${baseUrl}/temp/${path.basename(section.midFilename)}`, // remplace l'URL Python par PUBLIC_URL si besoin
+          wavUrl: `${baseUrl}/temp/${path.basename(wavPath)}`,
+          durationSec: durationSec
         });
       }
     }
 
-    return res.json({ sections: sectionsWithWav });
+    // Mapping des transitions Fill par défaut (Main X -> Fill In XX)
+    const fillMap = {
+      'Main A': 'Fill In AA',
+      'Main B': 'Fill In BB',
+      'Main C': 'Fill In CC',
+      'Main D': 'Fill In DD'
+    };
+
+    // Manifest complet pour séquenceur front
+    const manifest = {
+      beatId,
+      tempoFactorDefault: 1.0, // le front peut le modifier dynamiquement
+      sections: sectionsWithWav,
+      fillMap
+    };
+
+    return res.json(manifest);
   } catch (err) {
     console.error('❌ Erreur serveur (prepare-all-sections) :', err);
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
 
+// --- NOUVEAU : endpoint manifest simple en GET (pratique pour (re)charger côté front) ---
+router.get('/sequencer-manifest', async (req, res) => {
+  const beatId = parseInt(req.query.beatId, 10);
+  if (!beatId) return res.status(400).json({ error: 'beatId requis' });
 
+  // Réutilise la logique de /prepare-all-sections mais sans relancer l’extraction/convert si déjà présents
+  try {
+    const baseUrl = publicBaseUrl(req);
+    const files = await fs.promises.readdir(TEMP_DIR);
+
+    // Détecte sections déjà extraites (mid + wav)
+    const mains = ['A','B','C','D'];
+    const families = [
+      ...mains.map(l => `Main ${l}`),
+      ...mains.map(l => `Fill In ${l}${l}`),
+      ...mains.map(l => `Intro ${l}`),
+      ...mains.map(l => `Ending ${l}`)
+    ];
+
+    const sections = [];
+    for (const fam of families) {
+      const safe = fam.replace(/\s+/g, '_');
+      // Nom potentiels créés par ton script python: "<beatId>_<safe>.mid"
+      const midName = `${beatId}_${safe}.mid`;
+      const wavName = `${beatId}_${safe}.wav`;
+      const midPath = path.join(TEMP_DIR, midName);
+      const wavPath = path.join(TEMP_DIR, wavName);
+      if (fs.existsSync(midPath) && fs.existsSync(wavPath)) {
+        const durationSec = getWavDurationSec(wavPath);
+        const isMain = /^Main\s+[ABCD]$/i.test(fam);
+        const isFill = /^Fill In\s+[ABCD]{2}$/i.test(fam);
+        const isIntro = /^Intro\s+[ABCD]$/i.test(fam);
+        const isEnding = /^Ending\s+[ABCD]$/i.test(fam);
+
+        sections.push({
+          section: fam,
+          loop: !!isMain,
+          oneShot: !!(isFill || isIntro || isEnding),
+          midFilename: midName,
+          midiUrl: `${baseUrl}/temp/${midName}`,
+          wavUrl: `${baseUrl}/temp/${wavName}`,
+          durationSec
+        });
+      }
+    }
+
+    const fillMap = {
+      'Main A': 'Fill In AA',
+      'Main B': 'Fill In BB',
+      'Main C': 'Fill In CC',
+      'Main D': 'Fill In DD'
+    };
+
+    return res.json({
+      beatId,
+      tempoFactorDefault: 1.0,
+      sections,
+      fillMap
+    });
+  } catch (err) {
+    console.error('❌ Erreur /sequencer-manifest :', err);
+    return res.status(500).json({ error: 'Erreur lors de la construction du manifest' });
+  }
+});
 
 module.exports = router;
