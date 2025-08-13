@@ -109,7 +109,12 @@ router.post('/upload', authMiddleware, upload.single('beat'), async (req, res) =
       }
     });
 
-    res.status(201).json({ message: 'Beat uploadé avec succès', beat });
+   res.status(201).json({
+  message: 'Beat uploadé avec succès',
+  id: beat.id, // ✅ renvoyer directement l'ID
+  beat
+});
+
   } catch (err) {
     console.error("Erreur enregistrement beat :", err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
