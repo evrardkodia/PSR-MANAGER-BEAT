@@ -7,7 +7,7 @@ const { PrismaClient } = require('@prisma/client');
 const { spawn } = require('child_process');
 const router = express.Router();
 const prisma = new PrismaClient();
-
+const { createClient } = require('@supabase/supabase-js');
 
 console.log("🚀 routes/player.js chargé");
 
@@ -303,6 +303,10 @@ function convertMidToWavAsync(midPath, wavPath) {
   });
 }
 
+const supabase = createClient(
+  process.env.SUPABASE_URL,               // https://swtbkiudmfvnywcgpzfe.supabase.co
+  process.env.SUPABASE_SERVICE_ROLE_KEY    // clé service_role
+);
 
 router.post('/prepare-all-sections', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-all-sections appelée');
@@ -318,51 +322,63 @@ router.post('/prepare-all-sections', async (req, res) => {
       return res.status(404).json({ error: 'Beat ou URL introuvable' });
     }
 
+    // 1️⃣ Télécharger le .sty
     const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
     await downloadStyFromUrl(beat.url, inputStyPath);
 
+    // 2️⃣ Extraire le MIDI complet
     const fullMidPath = path.join(TEMP_DIR, `${beatId}_full.mid`);
     extractMidiFromSty(inputStyPath, fullMidPath);
 
+    // 3️⃣ Extraire toutes les sections via le script Python
     const pythonScript = path.join(__dirname, '../scripts/extract_all_sections.py');
-    const command = `python3 ${pythonScript} "${fullMidPath}" "${TEMP_DIR}"`;
-    const stdout = execSync(command, { encoding: 'utf-8' });
+    const stdout = execSync(`python3 ${pythonScript} "${fullMidPath}" "${TEMP_DIR}"`, { encoding: 'utf-8' });
     console.log('DEBUG stdout:', stdout);
-
     const pyJson = JSON.parse(stdout.trim());
-    const baseUrl = publicBaseUrl(req);
 
     const sectionsArray = Array.isArray(pyJson.sections) ? pyJson.sections : [];
+    const uploadResults = [];
 
-    // Conversion MIDI->WAV en parallèle
-    const conversionPromises = sectionsArray.map(async (section) => {
+    // 4️⃣ Conversion + Upload Supabase
+    for (const section of sectionsArray) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
       await convertMidToWavAsync(midPath, wavPath);
 
-      if (fs.existsSync(wavPath)) {
-        const durationSec = getWavDurationSec(wavPath);
-        const isMain = /^Main\s+[ABCD]$/i.test(section.sectionName);
-        const isFill = /^Fill In\s+[ABCD]{2}$/i.test(section.sectionName);
-        const isIntro = /^Intro\s+[ABCD]$/i.test(section.sectionName);
-        const isEnding = /^Ending\s+[ABCD]$/i.test(section.sectionName);
+      if (!fs.existsSync(wavPath)) continue;
 
-        return {
-          section: section.sectionName,
-          loop: !!isMain,
-          oneShot: !!(isFill || isIntro || isEnding),
-          midFilename: section.midFilename,
-          midiUrl: `${baseUrl}/temp/${path.basename(section.midFilename)}`,
-          wavUrl: `${baseUrl}/temp/${path.basename(wavPath)}`,
-          durationSec
-        };
-      }
-      return null;
-    });
+      const durationSec = getWavDurationSec(wavPath);
 
-    const sectionsWithWav = (await Promise.all(conversionPromises)).filter(Boolean);
+      // Upload MIDI
+      const midBuffer = fs.readFileSync(midPath);
+      const { error: midErr } = await supabase
+        .storage
+        .from('midiAndWav')
+        .upload(`${beatId}/${section.midFilename}`, midBuffer, { cacheControl: '3600', upsert: true });
+      if (midErr) console.error(`Erreur upload MID ${section.midFilename}:`, midErr);
 
+      // Upload WAV
+      const wavBuffer = fs.readFileSync(wavPath);
+      const { error: wavErr } = await supabase
+        .storage
+        .from('midiAndWav')
+        .upload(`${beatId}/${path.basename(wavPath)}`, wavBuffer, { cacheControl: '3600', upsert: true });
+      if (wavErr) console.error(`Erreur upload WAV ${path.basename(wavPath)}:`, wavErr);
+
+      uploadResults.push({
+        section: section.sectionName,
+        loop: /^Main\s+[ABCD]$/i.test(section.sectionName),
+        oneShot: /^(Fill In\s+[ABCD]{2}|Intro\s+[ABCD]|Ending\s+[ABCD])$/i.test(section.sectionName),
+        midFilename: section.midFilename,
+        midiUrl: `${process.env.SUPABASE_URL}/storage/v1/object/public/midiAndWav/${beatId}/${section.midFilename}`,
+        wavFilename: path.basename(wavPath),
+        wavUrl: `${process.env.SUPABASE_URL}/storage/v1/object/public/midiAndWav/${beatId}/${path.basename(wavPath)}`,
+        durationSec
+      });
+    }
+
+    // 5️⃣ Fichier manifest
     const fillMap = {
       'Main A': 'Fill In AA',
       'Main B': 'Fill In BB',
@@ -373,7 +389,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     const manifest = {
       beatId,
       tempoFactorDefault: 1.0,
-      sections: sectionsWithWav,
+      sections: uploadResults,
       fillMap
     };
 
@@ -383,6 +399,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
+
 
 
 // --- NOUVEAU : endpoint manifest simple en GET (pratique pour (re)charger côté front) ---
