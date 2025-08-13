@@ -101,9 +101,8 @@ function trimWavFile(wavPath, duration) {
 
 // --- Durée d’un WAV (pour planifier sans blanc) ---
 function getWavDurationSec(wavPath) {
-  // utilise ffprobe via ffmpeg binaire
   try {
-    const out = execSync(`${FFMPEG_EXE} -v error -show_entries format=duration -of default=nw=1:nk=1 -i "${wavPath}"`, { encoding: 'utf-8' });
+    const out = execSync(`${FFPROBE_EXE} -v error -show_entries format=duration -of default=nw=1:nk=1 -i "${wavPath}"`, { encoding: 'utf-8' });
     const val = parseFloat(String(out).trim());
     return isNaN(val) ? null : val;
   } catch (e) {
@@ -111,6 +110,7 @@ function getWavDurationSec(wavPath) {
     return null;
   }
 }
+
 
 // --- Routes ---
 
