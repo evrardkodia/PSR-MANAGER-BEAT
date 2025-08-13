@@ -70,26 +70,17 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   return result.stdout;
 }
 
+function convertMidToWav(midPath, wavPath) {
+  console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath);
+  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
+  const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
 
-function convertMidToWavAsync(midPath, wavPath) {
-  return new Promise((resolve, reject) => {
-    const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
-    const proc = spawn(TIMIDITY_EXE, args);
-
-    proc.on('error', (err) => reject(err));
-    proc.stderr.on('data', (data) => {
-      console.error('timidity stderr:', data.toString());
-    });
-
-    proc.on('close', (code) => {
-      if (code === 0) {
-        console.log(`✅ Conversion MIDI → WAV terminée : ${wavPath}`);
-        resolve();
-      } else {
-        reject(new Error(`Timidity a échoué avec le code ${code}`));
-      }
-    });
-  });
+  if (convertProcess.error) throw convertProcess.error;
+  if (convertProcess.status !== 0) {
+    console.error('❌ Timidity stderr:', convertProcess.stderr);
+    throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
+  }
+  console.log('✅ Conversion MIDI → WAV terminée');
 }
 
 function trimWavFile(wavPath, duration) {
@@ -289,6 +280,30 @@ router.get('/list-temps', async (req, res) => {
 });
 
 // --- NOUVEAU : préparation + manifest séquenceur (gapless & transitions) ---
+
+// Fonction async pour convertir MIDI -> WAV (conversion parallèle)
+function convertMidToWavAsync(midPath, wavPath) {
+  return new Promise((resolve, reject) => {
+    const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
+    const proc = spawn(TIMIDITY_EXE, args);
+
+    proc.on('error', (err) => reject(err));
+    proc.stderr.on('data', (data) => {
+      console.error('timidity stderr:', data.toString());
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        console.log(`✅ Conversion MIDI → WAV terminée : ${wavPath}`);
+        resolve();
+      } else {
+        reject(new Error(`Timidity a échoué avec le code ${code}`));
+      }
+    });
+  });
+}
+
+
 router.post('/prepare-all-sections', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-all-sections appelée');
   const { beatId } = req.body;
