@@ -1,18 +1,21 @@
-from mido import MidiFile, MidiTrack, Message
+from mido import MidiFile, MidiTrack, Message, MetaMessage
 import os
 import sys
 import traceback
 import json
 
 def extract_section(mid, section_name, next_section_name, output_path):
+    """
+    Extrait une section du MIDI en se basant sur les markers.
+    Supprime les silences en fin de section et n'inclut pas les notes des sections suivantes.
+    """
     try:
         ticks_per_beat = mid.ticks_per_beat
         out = MidiFile(ticks_per_beat=ticks_per_beat)
-
-        # Trouver les ticks absolus de début et fin de section selon markers
         start_tick = None
         end_tick = None
 
+        # 1️⃣ Détecter start et end ticks
         for track in mid.tracks:
             abs_time = 0
             for msg in track:
@@ -24,32 +27,33 @@ def extract_section(mid, section_name, next_section_name, output_path):
                     elif label == next_section_name and start_tick is not None:
                         end_tick = abs_time
                         break
-
             if end_tick is not None:
-                break  # On a trouvé fin, on peut sortir du loop
+                break
 
         if start_tick is None:
-            # Section non trouvée
-            return {section_name: 0}
+            return {section_name: 0}  # section non trouvée
 
         if end_tick is None:
-            # Pas de marqueur fin, prend la longueur totale midi (en ticks)
-            # MidiFile length est en secondes, on convertit en ticks approximatif
-            estimated_length_ticks = int(mid.length * ticks_per_beat * 4)  # *4 pour marge large
-            end_tick = estimated_length_ticks
+            # Si pas de marqueur de fin, prend le dernier tick réel du midi
+            end_tick = max(
+                sum(msg.time for msg in track) for track in mid.tracks
+            )
 
+        # 2️⃣ Extraire la section
         for track in mid.tracks:
             new_track = MidiTrack()
             abs_time = 0
             in_section = False
             last_tick = 0
             setup_msgs = []
-            pending_noteoffs = {}
+
+            # Liste des notes ouvertes pour fermeture correcte
+            open_notes = []
 
             for msg in track:
                 abs_time += msg.time
 
-                # Messages setup avant section (tempo, signature, etc)
+                # Messages setup avant section
                 if not in_section and abs_time <= start_tick and (
                     msg.type in ['set_tempo', 'key_signature', 'time_signature'] or
                     (msg.type == 'control_change' and msg.control in [0, 32]) or
@@ -57,10 +61,10 @@ def extract_section(mid, section_name, next_section_name, output_path):
                 ):
                     setup_msgs.append(msg.copy(time=msg.time))
 
-                # Pendant section
+                # Messages pendant la section
                 if start_tick <= abs_time <= end_tick:
                     if not in_section:
-                        # Première fois dans section : injecter messages setup à time=0
+                        # injecter setup à time=0
                         for sm in setup_msgs:
                             sm.time = 0
                             new_track.append(sm)
@@ -71,23 +75,21 @@ def extract_section(mid, section_name, next_section_name, output_path):
                     new_track.append(msg.copy(time=delta))
                     last_tick = abs_time
 
-                    # Suivi note_on/note_off pour fermeture correcte
+                    # Suivi note_on/note_off
                     if msg.type == 'note_on' and msg.velocity > 0:
-                        pending_noteoffs[(msg.channel, msg.note)] = last_tick
-                    elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
-                        pending_noteoffs.pop((msg.channel, msg.note), None)
+                        open_notes.append((msg.channel, msg.note))
+                    elif (msg.type == 'note_off') or (msg.type == 'note_on' and msg.velocity == 0):
+                        if (msg.channel, msg.note) in open_notes:
+                            open_notes.remove((msg.channel, msg.note))
 
-                elif abs_time > end_tick:
-                    break
-
-            # Fermer toutes les notes ouvertes à la fin de la section
-            for (ch, note), t in pending_noteoffs.items():
-                delta = end_tick - last_tick
-                new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
-                last_tick = end_tick
+            # 3️⃣ Fermer automatiquement les notes encore ouvertes à la fin de la section
+            if open_notes:
+                for ch, note in open_notes:
+                    new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=0))
 
             out.tracks.append(new_track)
 
+        # 4️⃣ Sauvegarde
         out.save(output_path)
         return {section_name: 1}
 
