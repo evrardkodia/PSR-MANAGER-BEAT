@@ -81,7 +81,26 @@ function convertMidToWav(midPath, wavPath) {
     throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
   }
   console.log('✅ Conversion MIDI → WAV terminée');
+
+  // Suppression des silences à l'aide de ffmpeg
+  console.log('🎶 Suppression des silences avec ffmpeg');
+  const silentArgs = [
+    '-i', wavPath,
+    '-af', 'silenceremove=start_periods=1:start_duration=0.5:start_threshold=-40dB', // Suppression des silences
+    wavPath
+  ];
+  
+  const silenceProcess = spawnSync(FFMPEG_EXE, silentArgs, { encoding: 'utf-8' });
+
+  if (silenceProcess.error) throw silenceProcess.error;
+  if (silenceProcess.status !== 0) {
+    console.error('❌ ffmpeg stderr:', silenceProcess.stderr);
+    throw new Error('Échec de la suppression des silences avec ffmpeg');
+  }
+
+  console.log('✅ Silences supprimés avec succès');
 }
+
 
 function trimWavFile(wavPath, duration) {
   const trimmedPath = wavPath.replace(/\.wav$/, '_trimmed.wav');
