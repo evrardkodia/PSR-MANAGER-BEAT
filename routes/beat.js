@@ -173,29 +173,17 @@ router.delete('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
     }
 
-    // 1️⃣ Supprime le fichier .sty du bucket principal
+    // Supprime fichier sur Supabase
     await deleteFileFromSupabaseStorage(beat.filename);
 
-    // 2️⃣ Supprime aussi tout le dossier beatId du bucket midiAndWav
-    const { error: deleteFolderError } = await supabaseAdmin
-      .storage
-      .from('midiAndWav')
-      .remove([`${beatId}/`]); // Supprime tout le dossier
-
-    if (deleteFolderError) {
-      console.error(`⚠️ Erreur suppression dossier midiAndWav/${beatId} :`, deleteFolderError);
-    } else {
-      console.log(`📂 Dossier midiAndWav/${beatId} supprimé`);
-    }
-
-    // 3️⃣ Supprime localement le .sty s'il existe
+    // Supprime localement si présent
     const filepath = path.join(uploadDir, beat.filename);
     if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
 
-    // 4️⃣ Supprime en base
+    // Supprime en base
     await prisma.beat.delete({ where: { id: beatId } });
 
-    res.json({ message: 'Beat et fichiers associés supprimés avec succès' });
+    res.json({ message: 'Beat supprimé avec succès' });
   } catch (err) {
     console.error('Erreur suppression beat:', err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
@@ -260,12 +248,41 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-
-module.exports = router;
-
-
 // Client Supabase avec Service Role Key pour la suppression
 
+router.delete('/:id', authMiddleware, async (req, res) => {
+  const beatId = parseInt(req.params.id);
 
-// ❌ DELETE beat
+  try {
+    const beat = await prisma.beat.findUnique({ where: { id: beatId } });
+    if (!beat || beat.userId !== req.user.userId) {
+      return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
+    }
 
+    // 1️⃣ Supprime fichier .sty dans le bucket uploads
+    await deleteFileFromSupabaseStorage(beat.filename);
+
+    // 2️⃣ Supprime le dossier complet midiAndWav/<beatId>
+    const { error: deleteFolderError } = await supabaseAdmin
+      .storage
+      .from('midiAndWav')
+      .remove([`${beatId}/`]);
+
+    if (deleteFolderError) console.error(`⚠️ Erreur suppression dossier midiAndWav/${beatId} :`, deleteFolderError);
+    else console.log(`📂 Dossier midiAndWav/${beatId} supprimé`);
+
+    // 3️⃣ Supprime fichier .sty local si présent
+    const filepath = path.join(uploadDir, beat.filename);
+    if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+
+    // 4️⃣ Supprime en base Prisma
+    await prisma.beat.delete({ where: { id: beatId } });
+
+    res.json({ message: 'Beat et fichiers associés supprimés avec succès' });
+  } catch (err) {
+    console.error('Erreur suppression beat:', err);
+    res.status(500).json({ error: 'Erreur serveur', details: err.message });
+  }
+});
+
+module.exports = router;
