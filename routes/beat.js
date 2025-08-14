@@ -6,11 +6,14 @@ const fs = require('fs');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const jwt = require('jsonwebtoken');
-
+const { createClient } = require('@supabase/supabase-js');
 const { uploadFileToSupabaseStorage, deleteFileFromSupabaseStorage } = require('../utils/supabaseStorage');
 
 const JWT_SECRET = process.env.JWT_SECRET;
-
+const supabaseAdmin = createClient(
+  'https://swtbkiudmfvnywcgpzfe.supabase.co',
+  process.env.SUPABASE_SERVICE_ROLE_KEY // ⚠️ clé service côté backend uniquement
+);
 // 📂 Dossier de destination temporaire pour les fichiers uploadés
 const uploadDir = path.resolve(process.cwd(), 'uploads');
 console.log('📂 Dossier upload utilisé (uploadDir) :', uploadDir);
@@ -170,17 +173,29 @@ router.delete('/:id', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
     }
 
-    // Supprime fichier sur Supabase
+    // 1️⃣ Supprime le fichier .sty du bucket principal
     await deleteFileFromSupabaseStorage(beat.filename);
 
-    // Supprime localement si présent
+    // 2️⃣ Supprime aussi tout le dossier beatId du bucket midiAndWav
+    const { error: deleteFolderError } = await supabaseAdmin
+      .storage
+      .from('midiAndWav')
+      .remove([`${beatId}/`]); // Supprime tout le dossier
+
+    if (deleteFolderError) {
+      console.error(`⚠️ Erreur suppression dossier midiAndWav/${beatId} :`, deleteFolderError);
+    } else {
+      console.log(`📂 Dossier midiAndWav/${beatId} supprimé`);
+    }
+
+    // 3️⃣ Supprime localement le .sty s'il existe
     const filepath = path.join(uploadDir, beat.filename);
     if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
 
-    // Supprime en base
+    // 4️⃣ Supprime en base
     await prisma.beat.delete({ where: { id: beatId } });
 
-    res.json({ message: 'Beat supprimé avec succès' });
+    res.json({ message: 'Beat et fichiers associés supprimés avec succès' });
   } catch (err) {
     console.error('Erreur suppression beat:', err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
@@ -247,3 +262,10 @@ router.get('/', authMiddleware, async (req, res) => {
 
 
 module.exports = router;
+
+
+// Client Supabase avec Service Role Key pour la suppression
+
+
+// ❌ DELETE beat
+
