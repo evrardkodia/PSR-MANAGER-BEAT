@@ -11,7 +11,7 @@ const { uploadFileToSupabaseStorage, deleteFileFromSupabaseStorage } = require('
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const supabaseAdmin = createClient(
-  'https://swtbkiudmfvnywcgpzfe.supabase.co',
+  'https://swtbkiudmfvnywcgpzfe.supabase.co/',
   process.env.SUPABASE_SERVICE_ROLE_KEY // ⚠️ clé service côté backend uniquement
 );
 // 📂 Dossier de destination temporaire pour les fichiers uploadés
@@ -161,34 +161,72 @@ router.get('/:id', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
   }
 });
-
-// ❌ DELETE beat
 router.delete('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
+  console.log('🗑️ Début suppression beat ID:', beatId);
 
   try {
     const beat = await prisma.beat.findUnique({ where: { id: beatId } });
-
     if (!beat || beat.userId !== req.user.userId) {
+      console.log('🚫 Beat introuvable ou accès interdit');
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
     }
 
-    // Supprime fichier sur Supabase
-    await deleteFileFromSupabaseStorage(beat.filename);
+    console.log('✅ Beat trouvé :', beat);
 
-    // Supprime localement si présent
+    // URL du dossier midiAndWav
+    const folderUrl = `https://swtbkiudmfvnywcgpzfe.supabase.co/storage/v1/object/public/midiAndWav/${beatId}`;
+    console.log('🔹 URL du dossier midiAndWav :', folderUrl);
+
+    // 1️⃣ Supprime fichier .sty dans le bucket uploads
+    console.log('📂 Suppression du fichier .sty dans uploads :', beat.filename);
+    const deleteStyRes = await deleteFileFromSupabaseStorage(beat.filename);
+    console.log('🟢 Résultat suppression .sty :', deleteStyRes);
+
+    // 2️⃣ Supprime le dossier complet midiAndWav/<beatId>
+    console.log(`📂 Tentative de suppression du dossier midiAndWav/${beatId}`);
+    const { data: listFiles, error: listError } = await supabaseAdmin
+      .storage
+      .from('midiAndWav')
+      .list(`${beatId}/`);
+
+    if (listError) {
+      console.error('⚠️ Erreur listing fichiers midiAndWav :', listError);
+    } else {
+      console.log(`🔹 Fichiers trouvés dans midiAndWav/${beatId} :`, listFiles.map(f => f.name));
+    }
+
+    const filePaths = listFiles ? listFiles.map(f => `${beatId}/${f.name}`) : [];
+    if (filePaths.length > 0) {
+      const { error: deleteFilesError } = await supabaseAdmin
+        .storage
+        .from('midiAndWav')
+        .remove(filePaths);
+
+      if (deleteFilesError) console.error('⚠️ Erreur suppression fichiers midiAndWav :', deleteFilesError);
+      else console.log(`🟢 Tous les fichiers du dossier midiAndWav/${beatId} ont été supprimés`);
+    } else {
+      console.log('ℹ️ Aucun fichier à supprimer dans midiAndWav');
+    }
+
+    // 3️⃣ Supprime fichier .sty local si présent
     const filepath = path.join(uploadDir, beat.filename);
-    if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+    if (fs.existsSync(filepath)) {
+      fs.unlinkSync(filepath);
+      console.log('🟢 Fichier local supprimé :', filepath);
+    }
 
-    // Supprime en base
+    // 4️⃣ Supprime en base Prisma
     await prisma.beat.delete({ where: { id: beatId } });
+    console.log('🗑️ Beat supprimé en base Prisma');
 
-    res.json({ message: 'Beat supprimé avec succès' });
+    res.json({ message: 'Beat et fichiers associés supprimés avec succès', folderUrl });
   } catch (err) {
-    console.error('Erreur suppression beat:', err);
+    console.error('❌ Erreur suppression beat:', err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
   }
 });
+
 
 // ✏️ PUT update beat
 router.put('/:id', authMiddleware, upload.single('beat'), async (req, res) => {
@@ -249,38 +287,64 @@ router.get('/', authMiddleware, async (req, res) => {
 });
 
 // Client Supabase avec Service Role Key pour la suppression
-
 router.delete('/:id', authMiddleware, async (req, res) => {
   const beatId = parseInt(req.params.id);
+  console.log('🗑️ Début suppression beat ID:', beatId);
 
   try {
     const beat = await prisma.beat.findUnique({ where: { id: beatId } });
     if (!beat || beat.userId !== req.user.userId) {
+      console.log('🚫 Beat introuvable ou accès interdit');
       return res.status(403).json({ error: 'Accès interdit ou beat introuvable' });
     }
 
-    // 1️⃣ Supprime fichier .sty dans le bucket uploads
-    await deleteFileFromSupabaseStorage(beat.filename);
+    console.log('✅ Beat trouvé :', beat);
+
+    // 1️⃣ Supprime le fichier .sty dans le bucket uploads
+    console.log('📂 Suppression du fichier .sty dans uploads :', beat.filename);
+    const deleteStyRes = await deleteFileFromSupabaseStorage(beat.filename);
+    console.log('🟢 Résultat suppression .sty :', deleteStyRes);
 
     // 2️⃣ Supprime le dossier complet midiAndWav/<beatId>
-    const { error: deleteFolderError } = await supabaseAdmin
+    console.log(`📂 Tentative de suppression du dossier midiAndWav/${beatId}`);
+    const { data: listFiles, error: listError } = await supabaseAdmin
       .storage
       .from('midiAndWav')
-      .remove([`${beatId}/`]);
+      .list(`${beatId}/`);
 
-    if (deleteFolderError) console.error(`⚠️ Erreur suppression dossier midiAndWav/${beatId} :`, deleteFolderError);
-    else console.log(`📂 Dossier midiAndWav/${beatId} supprimé`);
+    if (listError) {
+      console.error('⚠️ Erreur listing fichiers midiAndWav :', listError);
+    } else {
+      console.log(`🔹 Fichiers trouvés dans midiAndWav/${beatId} :`, listFiles.map(f => f.name));
+    }
+
+    const filePaths = listFiles ? listFiles.map(f => `${beatId}/${f.name}`) : [];
+    if (filePaths.length > 0) {
+      const { error: deleteFilesError } = await supabaseAdmin
+        .storage
+        .from('midiAndWav')
+        .remove(filePaths);
+
+      if (deleteFilesError) console.error('⚠️ Erreur suppression fichiers midiAndWav :', deleteFilesError);
+      else console.log(`🟢 Tous les fichiers du dossier midiAndWav/${beatId} ont été supprimés`);
+    } else {
+      console.log('ℹ️ Aucun fichier à supprimer dans midiAndWav');
+    }
 
     // 3️⃣ Supprime fichier .sty local si présent
     const filepath = path.join(uploadDir, beat.filename);
-    if (fs.existsSync(filepath)) fs.unlinkSync(filepath);
+    if (fs.existsSync(filepath)) {
+      fs.unlinkSync(filepath);
+      console.log('🟢 Fichier local supprimé :', filepath);
+    }
 
     // 4️⃣ Supprime en base Prisma
     await prisma.beat.delete({ where: { id: beatId } });
+    console.log('🗑️ Beat supprimé en base Prisma');
 
     res.json({ message: 'Beat et fichiers associés supprimés avec succès' });
   } catch (err) {
-    console.error('Erreur suppression beat:', err);
+    console.error('❌ Erreur suppression beat:', err);
     res.status(500).json({ error: 'Erreur serveur', details: err.message });
   }
 });
