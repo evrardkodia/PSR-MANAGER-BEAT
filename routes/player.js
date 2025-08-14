@@ -71,8 +71,11 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
 }
 
 function convertMidToWav(midPath, wavPath) {
-  console.log('🎶 Conversion Timidity :', TIMIDITY_EXE, '-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath);
-  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
+  console.log('🎶 Conversion MIDI → WAV avec Timidity');
+  
+  // Étape 1 : Conversion MIDI → WAV brut
+  const tempWav = wavPath.replace(/\.wav$/, '_temp.wav');
+  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', tempWav, midPath];
   const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
 
   if (convertProcess.error) throw convertProcess.error;
@@ -80,26 +83,22 @@ function convertMidToWav(midPath, wavPath) {
     console.error('❌ Timidity stderr:', convertProcess.stderr);
     throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
   }
-  console.log('✅ Conversion MIDI → WAV terminée');
 
-  // Suppression des silences à l'aide de ffmpeg
-  console.log('🎶 Suppression des silences avec ffmpeg');
-  const silentArgs = [
-    '-i', wavPath,
-    '-af', 'silenceremove=start_periods=1:start_duration=0.5:start_threshold=-40dB', // Suppression des silences
-    wavPath
-  ];
-  
-  const silenceProcess = spawnSync(FFMPEG_EXE, silentArgs, { encoding: 'utf-8' });
+  // Étape 2 : Rogner le silence en début et fin avec ffmpeg
+  // Ici on coupe 0.05s au début et fin, ajustable selon ton silence
+  const trimArgs = ['-i', tempWav, '-af', 'atrim=start=0.05', '-c', 'copy', wavPath];
+  const trimProcess = spawnSync(FFMPEG_EXE, trimArgs, { encoding: 'utf-8' });
 
-  if (silenceProcess.error) throw silenceProcess.error;
-  if (silenceProcess.status !== 0) {
-    console.error('❌ ffmpeg stderr:', silenceProcess.stderr);
-    throw new Error('Échec de la suppression des silences avec ffmpeg');
+  if (trimProcess.error) throw trimProcess.error;
+  if (trimProcess.status !== 0) {
+    console.error('❌ ffmpeg stderr:', trimProcess.stderr);
+    throw new Error('Échec du rognage du silence avec ffmpeg');
   }
 
-  console.log('✅ Silences supprimés avec succès');
+  fs.unlinkSync(tempWav); // supprime le fichier temporaire
+  console.log('✅ Conversion terminée et silence supprimé');
 }
+
 
 
 function trimWavFile(wavPath, duration) {
