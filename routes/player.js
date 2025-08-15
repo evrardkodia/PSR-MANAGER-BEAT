@@ -75,12 +75,13 @@ function convertMidToWav(midPath, wavPath) {
 
   // Création de la commande FluidSynth pour la conversion
   const args = [
-    '-ni', // Mode non interactif
-    SF2_PATH, // Chemin vers le fichier SoundFont (doit être défini dans les variables d'environnement)
-    midPath, // Chemin vers le fichier MIDI
-    '-F', wavPath, // Sortie du fichier WAV
+    '-ni',        // Mode non interactif
+    SF2_PATH,     // Chemin vers le fichier SoundFont
+    midPath,      // Chemin vers le fichier MIDI
     '-r', '44100', // Fréquence d'échantillonnage
-    '-g', '1.0' // Gain (volume)
+    '-g', '1.0',   // Gain (volume)
+    '-F', wavPath, // Sortie du fichier WAV
+    '-o', 'null'   // Désactive la sortie audio (évite l'erreur ALSA)
   ];
 
   // Appel à FluidSynth
@@ -98,6 +99,7 @@ function convertMidToWav(midPath, wavPath) {
 
   console.log('✅ Conversion terminée avec FluidSynth');
 }
+
 
 
 
@@ -307,12 +309,13 @@ function convertMidToWavAsync(midPath, wavPath) {
 
     // Création de la commande FluidSynth pour la conversion
     const args = [
-      '-ni', // Mode non interactif
-      SF2_PATH, // Chemin vers le fichier SoundFont
-      midPath, // Chemin vers le fichier MIDI
-      '-F', wavPath, // Sortie du fichier WAV
+      '-ni',        // Mode non interactif
+      SF2_PATH,     // Chemin vers le fichier SoundFont
+      midPath,      // Chemin vers le fichier MIDI
       '-r', '44100', // Fréquence d'échantillonnage
-      '-g', '1.0' // Gain (volume)
+      '-g', '1.0',   // Gain (volume)
+      '-F', wavPath, // Sortie du fichier WAV
+      '-o', 'null'   // Désactive la sortie audio (évite l'erreur ALSA)
     ];
 
     // Démarrer le processus FluidSynth
@@ -340,6 +343,7 @@ function convertMidToWavAsync(midPath, wavPath) {
     });
   });
 }
+
 
 
 const supabase = createClient(
