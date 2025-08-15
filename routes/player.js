@@ -313,16 +313,17 @@ router.get('/list-temps', async (req, res) => {
 // Fonction async pour convertir MIDI -> WAV (conversion parallèle)
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
-    const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '-Os', '-A120', '-o', wavPath, midPath]; // <-- ajout de -Os
+    const tempWav = wavPath.replace(/\.wav$/, '_temp.wav'); // fichier temporaire
+    const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '-Os', '-A120', '-o', tempWav, midPath];
+
     const proc = spawn(TIMIDITY_EXE, args);
 
     proc.on('error', (err) => reject(err));
-    proc.stderr.on('data', (data) => {
-      console.error('timidity stderr:', data.toString());
-    });
+    proc.stderr.on('data', (data) => console.error('timidity stderr:', data.toString()));
 
     proc.on('close', (code) => {
       if (code === 0) {
+        fs.renameSync(tempWav, wavPath); // renommer vers le nom final
         console.log(`✅ Conversion MIDI → WAV terminée : ${wavPath}`);
         resolve();
       } else {
