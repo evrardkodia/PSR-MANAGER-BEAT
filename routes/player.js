@@ -78,9 +78,9 @@ function convertMidToWav(midPath, wavPath) {
     '-ni',        // Mode non interactif
     SF2_PATH,     // Chemin vers le fichier SoundFont
     midPath,      // Chemin vers le fichier MIDI
+    '-F', wavPath, // Sortie du fichier WAV
     '-r', '44100', // Fréquence d'échantillonnage
     '-g', '1.0',   // Gain (volume)
-    '-F', wavPath, // Sortie du fichier WAV
     '-o', 'null'   // Désactive la sortie audio (évite l'erreur ALSA)
   ];
 
@@ -99,6 +99,47 @@ function convertMidToWav(midPath, wavPath) {
 
   console.log('✅ Conversion terminée avec FluidSynth');
 }
+function convertMidToWavAsync(midPath, wavPath) {
+  return new Promise((resolve, reject) => {
+    console.log('🎶 Conversion MIDI → WAV avec FluidSynth (asynchrone)');
+
+    // Création de la commande FluidSynth pour la conversion
+    const args = [
+      '-ni',        // Mode non interactif
+      SF2_PATH,     // Chemin vers le fichier SoundFont
+      midPath,      // Chemin vers le fichier MIDI
+      '-F', wavPath, // Sortie du fichier WAV
+      '-r', '44100', // Fréquence d'échantillonnage
+      '-g', '1.0',   // Gain (volume)
+      '-o', 'null'   // Désactive la sortie audio (évite l'erreur ALSA)
+    ];
+
+    // Démarrer le processus FluidSynth
+    const proc = spawn('fluidsynth', args);
+
+    // Gérer l'erreur du processus
+    proc.on('error', (err) => {
+      console.error('❌ Erreur FluidSynth :', err);
+      reject(err);
+    });
+
+    // Afficher les données d'erreur de FluidSynth
+    proc.stderr.on('data', (data) => {
+      console.error('❌ FluidSynth stderr:', data.toString());
+    });
+
+    // Lorsque le processus se termine
+    proc.on('close', (code) => {
+      if (code === 0) {
+        console.log(`✅ Conversion MIDI → WAV terminée : ${wavPath}`);
+        resolve();
+      } else {
+        reject(new Error(`FluidSynth a échoué avec le code ${code}`));
+      }
+    });
+  });
+}
+
 
 
 
@@ -303,46 +344,7 @@ router.get('/list-temps', async (req, res) => {
 // --- NOUVEAU : préparation + manifest séquenceur (gapless & transitions) ---
 
 // Fonction async pour convertir MIDI -> WAV (conversion parallèle)
-function convertMidToWavAsync(midPath, wavPath) {
-  return new Promise((resolve, reject) => {
-    console.log('🎶 Conversion MIDI → WAV avec FluidSynth (asynchrone)');
 
-    // Création de la commande FluidSynth pour la conversion
-    const args = [
-      '-ni',        // Mode non interactif
-      SF2_PATH,     // Chemin vers le fichier SoundFont
-      midPath,      // Chemin vers le fichier MIDI
-      '-r', '44100', // Fréquence d'échantillonnage
-      '-g', '1.0',   // Gain (volume)
-      '-F', wavPath, // Sortie du fichier WAV
-      '-o', 'null'   // Désactive la sortie audio (évite l'erreur ALSA)
-    ];
-
-    // Démarrer le processus FluidSynth
-    const proc = spawn('fluidsynth', args);
-
-    // Gérer l'erreur du processus
-    proc.on('error', (err) => {
-      console.error('❌ Erreur FluidSynth :', err);
-      reject(err);
-    });
-
-    // Afficher les données d'erreur de FluidSynth
-    proc.stderr.on('data', (data) => {
-      console.error('❌ FluidSynth stderr:', data.toString());
-    });
-
-    // Lorsque le processus se termine
-    proc.on('close', (code) => {
-      if (code === 0) {
-        console.log(`✅ Conversion MIDI → WAV terminée : ${wavPath}`);
-        resolve();
-      } else {
-        reject(new Error(`FluidSynth a échoué avec le code ${code}`));
-      }
-    });
-  });
-}
 
 
 
