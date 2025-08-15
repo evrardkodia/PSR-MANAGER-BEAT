@@ -14,24 +14,30 @@ def extract_section(mid, section_name, next_section_name, output_path):
         start_tick = None
         end_tick = None
 
+        # Trouver start_tick et end_tick pour tous les tracks
+        markers = []
         for track in mid.tracks:
             abs_time = 0
             for msg in track:
                 abs_time += msg.time
                 if msg.type == 'marker' and hasattr(msg, 'text'):
                     label = msg.text.strip()
-                    if label == section_name and start_tick is None:
-                        start_tick = abs_time
-                    elif label == next_section_name and start_tick is not None:
-                        end_tick = abs_time
-                        break
-            if end_tick is not None:
+                    markers.append((abs_time, label))
+
+        markers.sort(key=lambda x: x[0])
+
+        # Chercher les limites de la section
+        for i, (t, txt) in enumerate(markers):
+            if txt == section_name:
+                start_tick = t
+                end_tick = markers[i + 1][0] if i + 1 < len(markers) else None
                 break
 
         if start_tick is None:
             return {section_name: 0}
 
         if end_tick is None:
+            # Si aucune fin n'est trouvée, on prend la fin du fichier
             estimated_length_ticks = int(mid.length * ticks_per_beat * 4)
             end_tick = estimated_length_ticks
 
@@ -45,6 +51,8 @@ def extract_section(mid, section_name, next_section_name, output_path):
 
             for msg in track:
                 abs_time += msg.time
+
+                # Collecte des messages de configuration avant la section
                 if not in_section and abs_time <= start_tick and (
                     msg.type in ['set_tempo', 'key_signature', 'time_signature'] or
                     (msg.type == 'control_change' and msg.control in [0, 32]) or
@@ -52,7 +60,8 @@ def extract_section(mid, section_name, next_section_name, output_path):
                 ):
                     setup_msgs.append(msg.copy(time=msg.time))
 
-                if start_tick <= abs_time <= end_tick:
+                # Copier les messages dans la fenêtre [start_tick, end_tick)
+                if start_tick <= abs_time < end_tick:
                     if not in_section:
                         for sm in setup_msgs:
                             sm.time = 0
@@ -69,9 +78,10 @@ def extract_section(mid, section_name, next_section_name, output_path):
                     elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
                         pending_noteoffs.pop((msg.channel, msg.note), None)
 
-                elif abs_time > end_tick:
+                elif abs_time >= end_tick:
                     break
 
+            # Fermer toutes les notes ouvertes exactement à la fin de la section
             for (ch, note), t in pending_noteoffs.items():
                 delta = end_tick - last_tick
                 new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
