@@ -75,7 +75,7 @@ function convertMidToWav(midPath, wavPath) {
 
   // Étape 1 : Conversion MIDI → WAV brut
   const tempWav = wavPath.replace(/\.wav$/, '_temp.wav');
-  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', tempWav, midPath];
+  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '-Os', '-A120', '-o', tempWav, midPath]; // <-- ici on met -Os
   const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
 
   if (convertProcess.error) throw convertProcess.error;
@@ -91,7 +91,7 @@ function convertMidToWav(midPath, wavPath) {
   }
 
   // Étape 3 : Rognage précis à la durée exacte de la section
-  const trimArgs = ['-i', tempWav, '-t', `${duration.toFixed(4)}`, '-c', 'copy', wavPath]; // Utilisation de .toFixed(4) pour avoir une précision de 4 décimales
+  const trimArgs = ['-i', tempWav, '-t', `${duration.toFixed(4)}`, '-c', 'copy', wavPath];
   const trimProcess = spawnSync(FFMPEG_EXE, trimArgs, { encoding: 'utf-8' });
 
   if (trimProcess.error) throw trimProcess.error;
@@ -103,6 +103,7 @@ function convertMidToWav(midPath, wavPath) {
   fs.unlinkSync(tempWav); // Supprimer le fichier temporaire
   console.log('✅ Conversion terminée et silence supprimé');
 }
+
 
 
 
@@ -312,7 +313,7 @@ router.get('/list-temps', async (req, res) => {
 // Fonction async pour convertir MIDI -> WAV (conversion parallèle)
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
-    const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
+    const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '-Os', '-A120', '-o', wavPath, midPath]; // <-- ajout de -Os
     const proc = spawn(TIMIDITY_EXE, args);
 
     proc.on('error', (err) => reject(err));
@@ -330,6 +331,7 @@ function convertMidToWavAsync(midPath, wavPath) {
     });
   });
 }
+
 
 const supabase = createClient(
   process.env.SUPABASE_URL,               // https://swtbkiudmfvnywcgpzfe.supabase.co
