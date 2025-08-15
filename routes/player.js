@@ -84,9 +84,14 @@ function convertMidToWav(midPath, wavPath) {
     throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
   }
 
-  // Étape 2 : Rogner le silence en début et fin avec ffmpeg
-  // Ici on coupe 0.05s au début et fin, ajustable selon ton silence
-  const trimArgs = ['-i', tempWav, '-af', 'atrim=start=0.05', '-c', 'copy', wavPath];
+  // Étape 2 : Récupérer la durée exacte du WAV
+  const duration = getWavDurationSec(tempWav);
+  if (duration === null) {
+    throw new Error('Impossible de récupérer la durée du WAV');
+  }
+
+  // Étape 3 : Rognage précis à la durée exacte de la note
+  const trimArgs = ['-i', tempWav, '-t', `${duration}`, '-c', 'copy', wavPath];
   const trimProcess = spawnSync(FFMPEG_EXE, trimArgs, { encoding: 'utf-8' });
 
   if (trimProcess.error) throw trimProcess.error;
@@ -95,9 +100,10 @@ function convertMidToWav(midPath, wavPath) {
     throw new Error('Échec du rognage du silence avec ffmpeg');
   }
 
-  fs.unlinkSync(tempWav); // supprime le fichier temporaire
+  fs.unlinkSync(tempWav); // Supprimer le fichier temporaire
   console.log('✅ Conversion terminée et silence supprimé');
 }
+
 
 
 
