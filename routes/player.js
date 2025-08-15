@@ -72,7 +72,7 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
 
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion MIDI → WAV avec Timidity');
-  
+
   // Étape 1 : Conversion MIDI → WAV brut
   const tempWav = wavPath.replace(/\.wav$/, '_temp.wav');
   const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', tempWav, midPath];
@@ -90,8 +90,8 @@ function convertMidToWav(midPath, wavPath) {
     throw new Error('Impossible de récupérer la durée du WAV');
   }
 
-  // Étape 3 : Rognage précis à la durée exacte de la note
-  const trimArgs = ['-i', tempWav, '-t', `${duration}`, '-c', 'copy', wavPath];
+  // Étape 3 : Rognage précis à la durée exacte de la section
+  const trimArgs = ['-i', tempWav, '-t', `${duration.toFixed(4)}`, '-c', 'copy', wavPath]; // Utilisation de .toFixed(4) pour avoir une précision de 4 décimales
   const trimProcess = spawnSync(FFMPEG_EXE, trimArgs, { encoding: 'utf-8' });
 
   if (trimProcess.error) throw trimProcess.error;
@@ -103,6 +103,7 @@ function convertMidToWav(midPath, wavPath) {
   fs.unlinkSync(tempWav); // Supprimer le fichier temporaire
   console.log('✅ Conversion terminée et silence supprimé');
 }
+
 
 
 
@@ -130,12 +131,13 @@ function getWavDurationSec(wavPath) {
   try {
     const out = execSync(`${FFPROBE_EXE} -v error -show_entries format=duration -of default=nw=1:nk=1 -i "${wavPath}"`, { encoding: 'utf-8' });
     const val = parseFloat(String(out).trim());
-    return isNaN(val) ? null : val;
+    return isNaN(val) ? null : val; // Retourne la durée en secondes avec une précision maximale
   } catch (e) {
     console.warn('⚠️ Impossible de lire la durée via ffprobe:', e.message);
     return null;
   }
 }
+
 
 
 // --- Routes ---
@@ -176,8 +178,9 @@ router.post('/prepare-main', async (req, res) => {
       return res.status(500).json({ error: 'Fichier WAV manquant après conversion' });
     }
 
+    // Ajuster la durée en fonction de la précision et supprimer tout silence
     if (!isNaN(duration)) {
-      trimWavFile(wavPath, duration);
+      trimWavFile(wavPath, duration);  // Trim précis de la section en fonction de la durée
     }
 
     const wavUrl = `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`;
@@ -189,6 +192,7 @@ router.post('/prepare-main', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation main' });
   }
 });
+
 
 // --- Log de la structure de sections ---
 router.post('/prepare-all', async (req, res) => {
@@ -373,6 +377,9 @@ router.post('/prepare-all-sections', async (req, res) => {
       if (!fs.existsSync(wavPath)) continue;
 
       const durationSec = getWavDurationSec(wavPath);
+      if (!isNaN(durationSec)) {
+        trimWavFile(wavPath, durationSec);  // Trim précis pour chaque section
+      }
 
       // Upload MIDI
       const midBuffer = fs.readFileSync(midPath);
@@ -423,6 +430,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation des sections' });
   }
 });
+
 
 
 
