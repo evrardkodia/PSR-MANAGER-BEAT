@@ -75,7 +75,7 @@ function convertMidToWav(midPath, wavPath) {
   
   // Étape 1 : Conversion MIDI → WAV brut
   const tempWav = wavPath.replace(/\.wav$/, '_temp.wav');
-  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '-A120', '-o', tempWav, midPath];
+  const args = ['-c', TIMIDITY_CFG_PATH, '-t', 'wav', '-A120', '-o', tempWav, midPath];
   const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
 
   if (convertProcess.error) throw convertProcess.error;
