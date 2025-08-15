@@ -71,33 +71,34 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
 }
 
 function convertMidToWav(midPath, wavPath) {
-  console.log('🎶 Conversion MIDI → WAV avec Timidity');
-  
-  // Étape 1 : Conversion MIDI → WAV brut
-  const tempWav = wavPath.replace(/\.wav$/, '_temp.wav');
-  const args = ['-c', TIMIDITY_CFG_PATH, '-t', 'wav', '-A120', '-o', tempWav, midPath];
-  const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
+  console.log('🎶 Conversion MIDI → WAV avec FluidSynth');
+
+  // Création de la commande FluidSynth pour la conversion
+  const args = [
+    '-ni', // Mode non interactif
+    SF2_PATH, // Chemin vers le fichier SoundFont (doit être défini dans les variables d'environnement)
+    midPath, // Chemin vers le fichier MIDI
+    '-F', wavPath, // Sortie du fichier WAV
+    '-r', '44100', // Fréquence d'échantillonnage
+    '-g', '1.0' // Gain (volume)
+  ];
+
+  // Appel à FluidSynth
+  const convertProcess = spawnSync('fluidsynth', args, { encoding: 'utf-8' });
 
   if (convertProcess.error) throw convertProcess.error;
   if (convertProcess.status !== 0) {
-    console.error('❌ Timidity stderr:', convertProcess.stderr);
-    throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
+    console.error('❌ FluidSynth stderr:', convertProcess.stderr);
+    throw new Error(`FluidSynth a échoué avec le code ${convertProcess.status}`);
   }
 
-  // Étape 2 : Rogner le silence en début et fin avec ffmpeg
-  // Ici on coupe 0.05s au début et fin, ajustable selon ton silence
-  const trimArgs = ['-i', tempWav, '-af', 'atrim=start=0.05', '-c', 'copy', wavPath];
-  const trimProcess = spawnSync(FFMPEG_EXE, trimArgs, { encoding: 'utf-8' });
+  // Vérification de la sortie
+  if (convertProcess.stdout?.trim()) console.log('🎶 FluidSynth stdout:', convertProcess.stdout.trim());
+  if (convertProcess.stderr?.trim()) console.error('🎶 FluidSynth stderr:', convertProcess.stderr.trim());
 
-  if (trimProcess.error) throw trimProcess.error;
-  if (trimProcess.status !== 0) {
-    console.error('❌ ffmpeg stderr:', trimProcess.stderr);
-    throw new Error('Échec du rognage du silence avec ffmpeg');
-  }
-
-  fs.unlinkSync(tempWav); // supprime le fichier temporaire
-  console.log('✅ Conversion terminée et silence supprimé');
+  console.log('✅ Conversion terminée avec FluidSynth');
 }
+
 
 
 
@@ -302,24 +303,44 @@ router.get('/list-temps', async (req, res) => {
 // Fonction async pour convertir MIDI -> WAV (conversion parallèle)
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
-    const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
-    const proc = spawn(TIMIDITY_EXE, args);
+    console.log('🎶 Conversion MIDI → WAV avec FluidSynth (asynchrone)');
 
-    proc.on('error', (err) => reject(err));
-    proc.stderr.on('data', (data) => {
-      console.error('timidity stderr:', data.toString());
+    // Création de la commande FluidSynth pour la conversion
+    const args = [
+      '-ni', // Mode non interactif
+      SF2_PATH, // Chemin vers le fichier SoundFont
+      midPath, // Chemin vers le fichier MIDI
+      '-F', wavPath, // Sortie du fichier WAV
+      '-r', '44100', // Fréquence d'échantillonnage
+      '-g', '1.0' // Gain (volume)
+    ];
+
+    // Démarrer le processus FluidSynth
+    const proc = spawn('fluidsynth', args);
+
+    // Gérer l'erreur du processus
+    proc.on('error', (err) => {
+      console.error('❌ Erreur FluidSynth :', err);
+      reject(err);
     });
 
+    // Afficher les données d'erreur de FluidSynth
+    proc.stderr.on('data', (data) => {
+      console.error('❌ FluidSynth stderr:', data.toString());
+    });
+
+    // Lorsque le processus se termine
     proc.on('close', (code) => {
       if (code === 0) {
         console.log(`✅ Conversion MIDI → WAV terminée : ${wavPath}`);
         resolve();
       } else {
-        reject(new Error(`Timidity a échoué avec le code ${code}`));
+        reject(new Error(`FluidSynth a échoué avec le code ${code}`));
       }
     });
   });
 }
+
 
 const supabase = createClient(
   process.env.SUPABASE_URL,               // https://swtbkiudmfvnywcgpzfe.supabase.co
