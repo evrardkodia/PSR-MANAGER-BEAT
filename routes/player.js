@@ -74,15 +74,12 @@ function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion MIDI → WAV avec FluidSynth');
 
   // Création de la commande FluidSynth pour la conversion
-  const args = [
-    '-ni',        // Mode non interactif
-    SF2_PATH,     // Chemin vers le fichier SoundFont
-    midPath,      // Chemin vers le fichier MIDI
-    '-F', wavPath, // Sortie du fichier WAV
-    '-r', '44100', // Fréquence d'échantillonnage
-    '-g', '1.0',   // Gain (volume)
-    '-o', 'null'   // Désactive la sortie audio (évite l'erreur ALSA)
-  ];
+ const args = [
+  SF2_PATH,         // ex : '/chemin/vers/ma.sf2'
+  '-F',
+  wavPath,         // ex : '/chemin/vers/sortie.wav'
+  midPath          // ex : '/chemin/vers/midi.mid'
+];
 
   // Appel à FluidSynth
   const convertProcess = spawnSync('fluidsynth', args, { encoding: 'utf-8' });
