@@ -37,8 +37,8 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg -
     apt-get install -y nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Cloner et compiler FluidSynth (dernière version stable)
-RUN git clone --depth 1 https://github.com/FluidSynth/fluidsynth.git /tmp/fluidsynth && \
+# Cloner et compiler FluidSynth (dernière version stable) avec sous-modules
+RUN git clone --recurse-submodules --depth 1 https://github.com/FluidSynth/fluidsynth.git /tmp/fluidsynth && \
     mkdir /tmp/fluidsynth/build && \
     cd /tmp/fluidsynth/build && \
     cmake .. -Denable-ladspa=OFF -Denable-aufile=OFF -Denable-dbus=OFF && \
