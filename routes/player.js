@@ -2,9 +2,8 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const fetch = require('node-fetch');
-const { spawnSync, execSync } = require('child_process');
+const { spawnSync, execSync, spawn } = require('child_process');
 const { PrismaClient } = require('@prisma/client');
-const { spawn } = require('child_process');
 const router = express.Router();
 const prisma = new PrismaClient();
 const { createClient } = require('@supabase/supabase-js');
@@ -70,6 +69,7 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   return result.stdout;
 }
 
+// --- Conversion + trims ---
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion MIDI → WAV (sync) + hard trim');
 
@@ -119,7 +119,7 @@ function convertMidToWavAsync(midPath, wavPath) {
 
     const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
-    // 1) timidity (mêmes options que sync)
+    // 1) timidity identique à la version sync
     const tArgs = [
       '-c', TIMIDITY_CFG_PATH, '-Ow',
       '-A120',
@@ -136,7 +136,7 @@ function convertMidToWavAsync(midPath, wavPath) {
         return reject(new Error(`Timidity exit ${code}: ${tErr}`));
       }
 
-      // 2) ffmpeg : trim FIN puis DÉBUT (même filtre)
+      // 2) ffmpeg : trim FIN puis DÉBUT
       const filter =
         'areverse,' +
         'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-35dB,' +
@@ -163,25 +163,24 @@ function convertMidToWavAsync(midPath, wavPath) {
   });
 }
 
-
+// Coupe le WAV exactement à la durée souhaitée (avec 5 ms de marge)
 function hardTrimToDuration(wavPath, seconds) {
   const out = wavPath.replace(/\.wav$/i, '.tight.wav');
-  const eps = Math.max(0, seconds - 0.005); // laisse 5ms d’air
-  const args = ['-y','-i', wavPath, '-t', `${eps}`, '-acodec','pcm_s16le','-ar','44100', out];
+  const target = Math.max(0, Number(seconds) - 0.005); // 5ms d’air
+  const args = ['-y', '-i', wavPath, '-t', `${target}`, '-acodec', 'pcm_s16le', '-ar', '44100', out];
   const p = spawnSync(FFMPEG_EXE, args, { encoding: 'utf-8' });
   if (p.status !== 0) {
-    console.error('ffmpeg trim -t stderr:', p.stderr);
+    console.error('ffmpeg -t stderr:', p.stderr);
     throw new Error('hardTrimToDuration failed');
   }
   fs.renameSync(out, wavPath);
 }
 
-
+// (facultatif) ancien trim -t brut conservé si tu veux l’utiliser ailleurs
 function trimWavFile(wavPath, duration) {
   const trimmedPath = wavPath.replace(/\.wav$/, '_trimmed.wav');
-  const args = ['-i', wavPath, '-t', `${duration}`, '-c', 'copy', trimmedPath];
+  const args = ['-y','-i', wavPath, '-t', `${duration}`, '-acodec','pcm_s16le','-ar','44100', trimmedPath];
   const result = spawnSync(FFMPEG_EXE, args, { encoding: 'utf-8' });
-
   if (result.error || result.status !== 0) {
     console.error('❌ ffmpeg stderr:', result.stderr?.toString());
     console.error('❌ ffmpeg stdout:', result.stdout?.toString());
@@ -190,12 +189,11 @@ function trimWavFile(wavPath, duration) {
     }
     throw new Error('ffmpeg trim failed');
   }
-
   fs.renameSync(trimmedPath, wavPath);
   console.log('🔪 WAV rogné à', duration, 'secondes');
 }
 
-// --- Durée d’un WAV (pour planifier sans blanc) ---
+// --- Durée d’un WAV (pour debug éventuel) ---
 function getWavDurationSec(wavPath) {
   try {
     const out = execSync(`${FFPROBE_EXE} -v error -show_entries format=duration -of default=nw=1:nk=1 -i "${wavPath}"`, { encoding: 'utf-8' });
@@ -207,6 +205,21 @@ function getWavDurationSec(wavPath) {
   }
 }
 
+// Lit la durée MIDI (en s) du .mid (via python + mido) — utile si le JSON Python n’envoie pas durationSec
+function getMidiDurationSec(midPath) {
+  try {
+    const code = 'from mido import MidiFile; import sys; print(MidiFile(sys.argv[1]).length)';
+    const out = spawnSync('python3', ['-c', code, midPath], { encoding: 'utf-8' });
+    if (out.status === 0) {
+      const v = parseFloat(String(out.stdout).trim());
+      return Number.isFinite(v) ? v : null;
+    }
+    console.error('getMidiDurationSec stderr:', out.stderr);
+  } catch (e) {
+    console.error('getMidiDurationSec error:', e);
+  }
+  return null;
+}
 
 // --- Routes ---
 
@@ -233,7 +246,7 @@ router.post('/prepare-main', async (req, res) => {
     const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
     const sectionName = `Main ${mainLetter}`;
     const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionName);
-    const duration = parseFloat(stdout.trim());
+    const duration = parseFloat(stdout.trim()); // durée MIDI de la section (renvoyée par extract_main.py)
 
     if (!fs.existsSync(rawMidPath)) {
       return res.status(500).json({ error: 'Fichier MIDI extrait manquant après extraction' });
@@ -246,8 +259,12 @@ router.post('/prepare-main', async (req, res) => {
       return res.status(500).json({ error: 'Fichier WAV manquant après conversion' });
     }
 
-    if (!isNaN(duration)) {
-      trimWavFile(wavPath, duration);
+    // ✅ clamp final à la durée MIDI (anti-blanc garanti)
+    if (!Number.isNaN(duration) && duration > 0) {
+      hardTrimToDuration(wavPath, duration);
+    } else {
+      const durMidi = getMidiDurationSec(rawMidPath);
+      if (durMidi && durMidi > 0) hardTrimToDuration(wavPath, durMidi);
     }
 
     const wavUrl = `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`;
@@ -373,26 +390,53 @@ router.get('/list-temps', async (req, res) => {
   }
 });
 
-// --- NOUVEAU : préparation + manifest séquenceur (gapless & transitions) ---
+// --- Préparation + manifest séquenceur (gapless & transitions) ---
 
-// Fonction async pour convertir MIDI -> WAV (conversion parallèle)
+// Conversion asynchrone (unique, SANS --preserve-silence)
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
-    const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', wavPath, midPath];
-    const proc = spawn(TIMIDITY_EXE, args);
+    console.log('🎶 Conversion MIDI → WAV (async) + hard trim');
 
-    proc.on('error', (err) => reject(err));
-    proc.stderr.on('data', (data) => {
-      console.error('timidity stderr:', data.toString());
-    });
+    const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
-    proc.on('close', (code) => {
-      if (code === 0) {
-        console.log(`✅ Conversion MIDI → WAV terminée : ${wavPath}`);
-        resolve();
-      } else {
-        reject(new Error(`Timidity a échoué avec le code ${code}`));
+    const tArgs = [
+      '-c', TIMIDITY_CFG_PATH, '-Ow',
+      '-A120',
+      '-EFreverb=0','-EFchorus=0',
+      '-o', tempWav, midPath
+    ];
+    const t = spawn(TIMIDITY_EXE, tArgs);
+    let tErr = '';
+    t.stderr.on('data', d => { tErr += d.toString(); });
+    t.on('error', reject);
+    t.on('close', code => {
+      if (code !== 0) {
+        try { fs.unlinkSync(tempWav); } catch {}
+        return reject(new Error(`Timidity exit ${code}: ${tErr}`));
       }
+
+      const filter =
+        'areverse,' +
+        'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-35dB,' +
+        'areverse,' +
+        'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
+
+      const fArgs = [
+        '-y','-i', tempWav,
+        '-af', filter,
+        '-acodec','pcm_s16le','-ar','44100',
+        wavPath
+      ];
+      const f = spawn(FFMPEG_EXE, fArgs);
+      let fErr = '';
+      f.stderr.on('data', d => { fErr += d.toString(); });
+      f.on('error', reject);
+      f.on('close', code2 => {
+        try { fs.unlinkSync(tempWav); } catch {}
+        if (code2 !== 0) return reject(new Error(`ffmpeg exit ${code2}: ${fErr}`));
+        console.log('✅ Conversion + hard trim OK →', wavPath);
+        resolve();
+      });
     });
   });
 }
@@ -439,10 +483,16 @@ router.post('/prepare-all-sections', async (req, res) => {
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
       await convertMidToWavAsync(midPath, wavPath);
-
       if (!fs.existsSync(wavPath)) continue;
 
-      const durationSec = getWavDurationSec(wavPath);
+      // ✅ clamp final à la durée MIDI (via JSON.durationSec si dispo, sinon en lisant le .mid)
+      const durJson = Number(section.durationSec);
+      const durMidi = Number.isFinite(durJson) && durJson > 0 ? durJson : getMidiDurationSec(midPath);
+      if (durMidi && durMidi > 0) {
+        hardTrimToDuration(wavPath, durMidi);
+      }
+
+      const durationSec = getWavDurationSec(wavPath); // pour info
 
       // Upload MIDI
       const midBuffer = fs.readFileSync(midPath);
@@ -494,19 +544,15 @@ router.post('/prepare-all-sections', async (req, res) => {
   }
 });
 
-
-
-// --- NOUVEAU : endpoint manifest simple en GET (pratique pour (re)charger côté front) ---
+// --- endpoint manifest simple en GET ---
 router.get('/sequencer-manifest', async (req, res) => {
   const beatId = parseInt(req.query.beatId, 10);
   if (!beatId) return res.status(400).json({ error: 'beatId requis' });
 
-  // Réutilise la logique de /prepare-all-sections mais sans relancer l’extraction/convert si déjà présents
   try {
     const baseUrl = publicBaseUrl(req);
     const files = await fs.promises.readdir(TEMP_DIR);
 
-    // Détecte sections déjà extraites (mid + wav)
     const mains = ['A','B','C','D'];
     const families = [
       ...mains.map(l => `Main ${l}`),
@@ -518,7 +564,6 @@ router.get('/sequencer-manifest', async (req, res) => {
     const sections = [];
     for (const fam of families) {
       const safe = fam.replace(/\s+/g, '_');
-      // Nom potentiels créés par ton script python: "<beatId>_<safe>.mid"
       const midName = `${beatId}_${safe}.mid`;
       const wavName = `${beatId}_${safe}.wav`;
       const midPath = path.join(TEMP_DIR, midName);
