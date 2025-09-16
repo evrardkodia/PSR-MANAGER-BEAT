@@ -69,6 +69,57 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
   return result.stdout;
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Lecture du tempo et de la signature depuis le MIDI (Python)
+   ────────────────────────────────────────────────────────────── */
+function readMidiMeta(midPath) {
+  // Renvoie { bpm, ts_num, ts_den } (défauts Yamaha 120 / 4/4 si absent)
+  const py = `
+from mido import MidiFile, tempo2bpm
+import json, sys
+mf = MidiFile(sys.argv[1])
+bpm = 120.0
+num, den = 4, 4
+for tr in mf.tracks:
+  for m in tr:
+    if m.is_meta and m.type == 'set_tempo':
+      bpm = float(tempo2bpm(m.tempo))
+      break
+for tr in mf.tracks:
+  for m in tr:
+    if m.is_meta and m.type == 'time_signature':
+      num, den = m.numerator, m.denominator
+      break
+print(json.dumps({"bpm": bpm, "ts_num": num, "ts_den": den}))
+`;
+  const out = spawnSync('python3', ['-c', py, midPath], { encoding: 'utf-8' });
+  if (out.status !== 0) {
+    console.warn('⚠️ readMidiMeta stderr:', out.stderr);
+    return { bpm: 120, ts_num: 4, ts_den: 4 };
+  }
+  try {
+    const j = JSON.parse(String(out.stdout).trim());
+    return {
+      bpm: Number(j.bpm) || 120,
+      ts_num: parseInt(j.ts_num) || 4,
+      ts_den: parseInt(j.ts_den) || 4
+    };
+  } catch {
+    return { bpm: 120, ts_num: 4, ts_den: 4 };
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Quantification de durée sur un nombre ENTIER de mesures
+   ────────────────────────────────────────────────────────────── */
+function quantizeDurationToBars(rawSeconds, bpm, ts_num) {
+  // barDur = (60/bpm) * ts_num ; on arrondit au nombre de mesures le + proche
+  const bar = (60 / (bpm || 120)) * (ts_num || 4);
+  if (!isFinite(bar) || bar <= 0) return rawSeconds;
+  const bars = Math.max(1, Math.round(rawSeconds / bar));
+  return bars * bar;
+}
+
 // --- Conversion + trims ---
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion MIDI → WAV (sync) + hard trim');
@@ -89,7 +140,7 @@ function convertMidToWav(midPath, wavPath) {
     throw new Error(`Timidity a échoué (${t.status ?? 'n/a'})`);
   }
 
-  // 2) ffmpeg : trim FIN puis DÉBUT (fin moins agressive)
+  // 2) ffmpeg : trim FIN puis DÉBUT (fin un peu tolérante)
   const filter =
     'areverse,' +
     'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
@@ -136,7 +187,7 @@ function convertMidToWavAsync(midPath, wavPath) {
         return reject(new Error(`Timidity exit ${code}: ${tErr}`));
       }
 
-      // 2) ffmpeg : trim FIN puis DÉBUT (fin moins agressive)
+      // 2) ffmpeg : trim FIN puis DÉBUT
       const filter =
         'areverse,' +
         'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
@@ -164,7 +215,8 @@ function convertMidToWavAsync(midPath, wavPath) {
 }
 
 // Coupe le WAV exactement à la durée souhaitée (petite marge anti-click)
-const TAIL_EARLY_MS = 0.000; // ← 3 ms seulement ; passe à 0.000 si la boucle te paraît encore trop rapide
+// Tu peux ajuster TAIL_EARLY_MS si la boucle te paraît encore trop pressée
+const TAIL_EARLY_MS = 0.000;
 function hardTrimToDuration(wavPath, seconds) {
   const out = wavPath.replace(/\.wav$/i, '.tight.wav');
   const target = Math.max(0, Number(seconds) - TAIL_EARLY_MS);
@@ -175,23 +227,6 @@ function hardTrimToDuration(wavPath, seconds) {
     throw new Error('hardTrimToDuration failed');
   }
   fs.renameSync(out, wavPath);
-}
-
-// (facultatif) ancien trim -t brut
-function trimWavFile(wavPath, duration) {
-  const trimmedPath = wavPath.replace(/\.wav$/, '_trimmed.wav');
-  const args = ['-y','-i', wavPath, '-t', `${duration}`, '-acodec','pcm_s16le','-ar','44100', trimmedPath];
-  const result = spawnSync(FFMPEG_EXE, args, { encoding: 'utf-8' });
-  if (result.error || result.status !== 0) {
-    console.error('❌ ffmpeg stderr:', result.stderr?.toString());
-    console.error('❌ ffmpeg stdout:', result.stdout?.toString());
-    if (result.error && result.error.code === 'ENOENT') {
-      throw new Error('ffmpeg non trouvé dans l’environnement. Assure-toi qu’il est bien installé dans le Dockerfile.');
-    }
-    throw new Error('ffmpeg trim failed');
-  }
-  fs.renameSync(trimmedPath, wavPath);
-  console.log('🔪 WAV rogné à', duration, 'secondes');
 }
 
 // --- Durée d’un WAV (pour debug éventuel) ---
@@ -247,7 +282,10 @@ router.post('/prepare-main', async (req, res) => {
     const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
     const sectionName = `Main ${mainLetter}`;
     const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionName);
-    const duration = parseFloat(stdout.trim()); // durée MIDI de la section
+    let duration = parseFloat(stdout.trim()); // durée MIDI de la section (si renvoyée)
+    if (!Number.isFinite(duration) || duration <= 0) {
+      duration = getMidiDurationSec(rawMidPath);
+    }
 
     if (!fs.existsSync(rawMidPath)) {
       return res.status(500).json({ error: 'Fichier MIDI extrait manquant après extraction' });
@@ -255,18 +293,14 @@ router.post('/prepare-main', async (req, res) => {
 
     const wavPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}.wav`);
     convertMidToWav(rawMidPath, wavPath);
-
     if (!fs.existsSync(wavPath)) {
       return res.status(500).json({ error: 'Fichier WAV manquant après conversion' });
     }
 
-    // ✅ clamp final à la durée MIDI (anti-blanc garanti)
-    if (!Number.isNaN(duration) && duration > 0) {
-      hardTrimToDuration(wavPath, duration);
-    } else {
-      const durMidi = getMidiDurationSec(rawMidPath);
-      if (durMidi && durMidi > 0) hardTrimToDuration(wavPath, durMidi);
-    }
+    // 🔁 Quantifie la durée au nombre ENTIER de mesures
+    const meta = readMidiMeta(rawMidPath); // { bpm, ts_num, ts_den }
+    const targetSec = quantizeDurationToBars(duration || getMidiDurationSec(rawMidPath) || getWavDurationSec(wavPath), meta.bpm, meta.ts_num);
+    if (targetSec && targetSec > 0) hardTrimToDuration(wavPath, targetSec);
 
     const wavUrl = `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`;
     console.log(`✅ Préparation terminée, wav accessible : ${wavUrl}`);
@@ -423,28 +457,35 @@ router.post('/prepare-all-sections', async (req, res) => {
     // 3️⃣ Extraire toutes les sections via le script Python
     const pythonScript = path.join(__dirname, '../scripts/extract_all_sections.py');
     const stdout = execSync(`python3 ${pythonScript} "${fullMidPath}" "${TEMP_DIR}"`, { encoding: 'utf-8' });
-    console.log('DEBUG stdout:', stdout);
     const pyJson = JSON.parse(stdout.trim());
 
     const sectionsArray = Array.isArray(pyJson.sections) ? pyJson.sections : [];
     const uploadResults = [];
+
+    // On lira le tempo/signature sur la 1ère MAIN existante pour fournir des métadonnées globales
+    let globalBpm = beat.tempo || 120;
+    let globalTsNum = 4, globalTsDen = 4;
 
     // 4️⃣ Conversion + Upload Supabase
     for (const section of sectionsArray) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
+      // Métadonnées par section
+      const meta = readMidiMeta(midPath);
+      if (!globalBpm) globalBpm = meta.bpm;
+      if (globalTsNum === 4 && globalTsDen === 4) { globalTsNum = meta.ts_num; globalTsDen = meta.ts_den; }
+
       await convertMidToWavAsync(midPath, wavPath);
       if (!fs.existsSync(wavPath)) continue;
 
-      // ✅ clamp final à la durée MIDI
-      const durJson = Number(section.durationSec);
-      const durMidi = Number.isFinite(durJson) && durJson > 0 ? durJson : getMidiDurationSec(midPath);
-      if (durMidi && durMidi > 0) {
-        hardTrimToDuration(wavPath, durMidi);
-      }
+      // Durée MIDI brute
+      const midiDur = getMidiDurationSec(midPath);
+      // 🔁 Durée quantifiée sur mesures (Yamaha-friendly)
+      const targetSec = quantizeDurationToBars(midiDur || getWavDurationSec(wavPath), meta.bpm, meta.ts_num);
+      if (targetSec && targetSec > 0) hardTrimToDuration(wavPath, targetSec);
 
-      const durationSec = getWavDurationSec(wavPath); // pour info
+      const durationSec = getWavDurationSec(wavPath);
 
       // Upload MIDI
       const midBuffer = fs.readFileSync(midPath);
@@ -470,11 +511,12 @@ router.post('/prepare-all-sections', async (req, res) => {
         midiUrl: `${process.env.SUPABASE_URL}/storage/v1/object/public/midiAndWav/${beatId}/${section.midFilename}`,
         wavFilename: path.basename(wavPath),
         wavUrl: `${process.env.SUPABASE_URL}/storage/v1/object/public/midiAndWav/${beatId}/${path.basename(wavPath)}`,
-        durationSec
+        durationSec,
+        bpm: meta.bpm,
+        beatsPerBar: meta.ts_num
       });
     }
 
-    // 5️⃣ Fichier manifest
     const fillMap = {
       'Main A': 'Fill In AA',
       'Main B': 'Fill In BB',
@@ -482,8 +524,15 @@ router.post('/prepare-all-sections', async (req, res) => {
       'Main D': 'Fill In DD'
     };
 
+    // Métadonnées globales pour scheduler côté front
+    const barDurSec = (60 / (globalBpm || 120)) * (globalTsNum || 4);
+
     const manifest = {
       beatId,
+      baseTempoBpm: globalBpm,
+      beatsPerBar: globalTsNum,
+      barDurSec,
+      quantizeLeadMs: 12,
       tempoFactorDefault: 1.0,
       sections: uploadResults,
       fillMap
