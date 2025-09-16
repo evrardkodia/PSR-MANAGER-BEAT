@@ -18,6 +18,7 @@ def file_end_tick(mid):
 def build_markers_timeline(mid):
     """
     Retourne une liste triée [(tick, label)] de TOUS les marqueurs (dédupliqués par (tick,label)).
+    On ne considère que les meta 'marker' (pas 'text', pas 'cue_marker'), comme tu le souhaites.
     """
     markers = []
     seen = set()
@@ -25,7 +26,7 @@ def build_markers_timeline(mid):
         abs_time = 0
         for msg in track:
             abs_time += msg.time
-            if msg.is_meta and msg.type in ('marker',):  # on se limite à 'marker'
+            if msg.is_meta and msg.type in ('marker',):  # strict: seulement 'marker'
                 key = (abs_time, msg.text.strip())
                 if key not in seen:
                     seen.add(key)
@@ -35,13 +36,24 @@ def build_markers_timeline(mid):
 
 def find_section_bounds(markers, label, default_end):
     """
-    Trouve (start_tick, end_tick) pour LE PREMIER marqueur 'label' rencontré chronologiquement.
-    end_tick = tick du marqueur suivant (quel que soit son nom), sinon default_end.
+    Trouve (start_tick, end_tick) pour LE PREMIER marqueur 'label' rencontré.
+    end_tick = tick du PREMIER marqueur suivant chronologiquement, QUEL QUE SOIT SON NOM.
+    IMPORTANT: on accepte un "prochain" marqueur au MÊME TICK (tick == start_tick) si présent.
+    (=> s'il y a un marqueur juste derrière au même tick, la section est volontairement vide.)
     """
     for i, (tick, text) in enumerate(markers):
         if text == label:
             start_tick = tick
-            end_tick = markers[i+1][0] if i + 1 < len(markers) else default_end
+            # Chercher le tout premier marqueur après l'index i, même s'il a le même tick
+            end_tick = None
+            for j in range(i + 1, len(markers)):
+                next_tick, _ = markers[j]
+                # NOTE: <= autoriserait de retomber sur le même marqueur; on veut le "suivant" dans la liste,
+                # donc on teste à partir de j = i+1 et on accepte tick == start_tick.
+                end_tick = next_tick
+                break
+            if end_tick is None:
+                end_tick = default_end
             return start_tick, end_tick
     return None, None
 
@@ -131,78 +143,4 @@ def copy_section(mid, start_tick, end_tick):
                 elif copied.type == 'note_off' or (copied.type == 'note_on' and copied.velocity == 0):
                     pending_notes.pop((copied.channel, copied.note), None)
 
-                dst.append(copied)
-                last_emitted_abs = abs_time
-
-            # Sortie de la boucle piste si on a dépassé la fenêtre
-            if abs_time >= end_tick:
-                break
-
-        # 2) Clôture stricte à end_tick : fermer notes + lever pédale + resets
-        if in_section:
-            # Fermer toutes les notes ouvertes
-            for (ch, note), start_t in list(pending_notes.items()):
-                delta = end_tick - last_emitted_abs
-                dst.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
-                last_emitted_abs = end_tick
-
-            # Lever pédale (CC64=0) sur TOUS les canaux vus/possibles (0..15)
-            # puis All Notes Off (123) et Reset All Controllers (121) par sécurité
-            # On met tout à time=0 car on est exactement au tick de fin après les note_off
-            for ch in range(16):
-                dst.append(Message('control_change', channel=ch, control=64, value=0, time=0))   # sustain off
-                dst.append(Message('control_change', channel=ch, control=123, value=0, time=0))  # all notes off
-                dst.append(Message('control_change', channel=ch, control=121, value=0, time=0))  # reset controllers
-
-            # (Mido insèrera end_of_track automatiquement à la sauvegarde)
-
-    return out
-
-# ---------- API extraction par nom ----------
-ALL_LABELS = [
-    'Intro A', 'Intro B', 'Intro C', 'Intro D',
-    'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
-    'Main A', 'Main B', 'Main C', 'Main D',
-    'Ending A', 'Ending B', 'Ending C', 'Ending D'
-]
-
-def extract_one_section(mid, label, markers, out_dir):
-    end_fallback = file_end_tick(mid)
-    start_tick, end_tick = find_section_bounds(markers, label, end_fallback)
-    if start_tick is None:
-        return {label: 0}
-
-    section_mid = copy_section(mid, start_tick, end_tick)
-
-    # Sauvegarde
-    out_path = os.path.join(out_dir, f"{label.replace(' ', '_')}.mid")
-    section_mid.save(out_path)
-    return {label: 1}
-
-def extract_all_sections(input_path, output_dir):
-    result = {"sections": {}}
-    try:
-        mid = MidiFile(input_path)
-        markers = build_markers_timeline(mid)
-
-        for label in ALL_LABELS:
-            res = extract_one_section(mid, label, markers, output_dir)
-            result["sections"].update(res)
-
-        print(json.dumps(result))
-    except Exception as e:
-        err_json = json.dumps({"error": f"Erreur générale : {str(e)}"})
-        print(err_json, file=sys.stderr)
-        print(err_json)
-
-# ---------- CLI ----------
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python extract_sections.py input.mid output_directory")
-        sys.exit(1)
-
-    input_mid = sys.argv[1]
-    output_directory = sys.argv[2]
-    os.makedirs(output_directory, exist_ok=True)
-
-    extract_all_sections(input_mid, output_directory)
+                dst.ap
