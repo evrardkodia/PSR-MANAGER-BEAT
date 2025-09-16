@@ -92,7 +92,7 @@ function convertMidToWav(midPath, wavPath) {
   // 2) ffmpeg : trim FIN puis DÉBUT (ultra robuste)
   const filter =
     'areverse,' +
-    'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-35dB,' +
+    'silenceremove=start_periods=1:start_silence=0.25:start_threshold=-35dB,' +
     'areverse,' +
     'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
 
