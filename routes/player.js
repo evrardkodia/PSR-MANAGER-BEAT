@@ -69,34 +69,36 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
 
   return result.stdout;
 }
-
 function convertMidToWav(midPath, wavPath) {
-  console.log('🎶 Conversion MIDI → WAV avec Timidity');
-  
-  // Étape 1 : Conversion MIDI → WAV brut
+  console.log('🎶 Conversion MIDI → WAV');
+
   const tempWav = wavPath.replace(/\.wav$/, '_temp.wav');
-  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', tempWav, midPath];
-  const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
 
-  if (convertProcess.error) throw convertProcess.error;
-  if (convertProcess.status !== 0) {
-    console.error('❌ Timidity stderr:', convertProcess.stderr);
-    throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
+  // 1) timidity (enlève --preserve-silence pour ne pas forcer les blancs)
+  const args1 = ['-c', TIMIDITY_CFG_PATH, '-Ow', '-A120', '-o', tempWav, midPath];
+  const p1 = spawnSync(TIMIDITY_EXE, args1, { encoding: 'utf-8' });
+  if (p1.error || p1.status !== 0) {
+    console.error('❌ timidity stderr:', p1.stderr);
+    throw new Error('Timidity a échoué');
   }
 
-  // Étape 2 : Rogner le silence en début et fin avec ffmpeg
-  // Ici on coupe 0.05s au début et fin, ajustable selon ton silence
-  const trimArgs = ['-i', tempWav, '-af', 'atrim=start=0.05', '-c', 'copy', wavPath];
-  const trimProcess = spawnSync(FFMPEG_EXE, trimArgs, { encoding: 'utf-8' });
-
-  if (trimProcess.error) throw trimProcess.error;
-  if (trimProcess.status !== 0) {
-    console.error('❌ ffmpeg stderr:', trimProcess.stderr);
-    throw new Error('Échec du rognage du silence avec ffmpeg');
+  // 2) ffmpeg: trim début & fin (silenceremove)
+  const args2 = [
+    '-y',
+    '-i', tempWav,
+    '-af', 'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-45dB:stop_periods=1:stop_silence=0.05:stop_threshold=-45dB',
+    '-acodec', 'pcm_s16le',
+    '-ar', '44100',
+    wavPath
+  ];
+  const p2 = spawnSync(FFMPEG_EXE, args2, { encoding: 'utf-8' });
+  if (p2.error || p2.status !== 0) {
+    console.error('❌ ffmpeg stderr:', p2.stderr);
+    throw new Error('Échec du trimming avec ffmpeg');
   }
 
-  fs.unlinkSync(tempWav); // supprime le fichier temporaire
-  console.log('✅ Conversion terminée et silence supprimé');
+  fs.unlinkSync(tempWav);
+  console.log('✅ Conversion + trimming OK');
 }
 
 
