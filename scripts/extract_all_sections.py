@@ -1,136 +1,206 @@
-import sys
-import os
-import json
-import traceback
+#!/usr/bin/env python3
+import sys, os, json, traceback
+from collections import defaultdict
 from mido import MidiFile, MidiTrack, Message
 
 BASE_URL = "https://psr-manager-beat.onrender.com/temp"
 
-def extract_section(mid, section_name, next_section_name, output_path):
-    try:
-        ticks_per_beat = mid.ticks_per_beat
-        out = MidiFile(ticks_per_beat=ticks_per_beat)
+ALL_LABELS = [
+    "Intro A","Intro B","Intro C","Intro D",
+    "Fill In AA","Fill In BB","Fill In CC","Fill In DD",
+    "Main A","Main B","Main C","Main D",
+    "Ending A","Ending B","Ending C","Ending D"
+]
 
-        start_tick = None
-        end_tick = None
+# ---------------- utils ----------------
+def file_end_tick(mid: MidiFile) -> int:
+    m = 0
+    for tr in mid.tracks:
+        t = 0
+        for msg in tr:
+            t += msg.time
+        if t > m: m = t
+    return m
 
-        for track in mid.tracks:
-            abs_time = 0
-            for msg in track:
-                abs_time += msg.time
-                if msg.type == 'marker' and hasattr(msg, 'text'):
-                    label = msg.text.strip()
-                    if label == section_name and start_tick is None:
-                        start_tick = abs_time
-                    elif label == next_section_name and start_tick is not None:
-                        end_tick = abs_time
-                        break
-            if end_tick is not None:
+def build_markers_start(mid: MidiFile):
+    """(tick, label) pour META 'marker' uniquement (pour le START)."""
+    out, seen = [], set()
+    for tr in mid.tracks:
+        t = 0
+        for msg in tr:
+            t += msg.time
+            if msg.is_meta and msg.type == "marker" and hasattr(msg, "text"):
+                key = (t, msg.text.strip())
+                if key not in seen:
+                    seen.add(key); out.append(key)
+    out.sort(key=lambda x: x[0])
+    return out
+
+def build_all_meta(mid: MidiFile):
+    """(tick, label, type) pour marker + text + cue_marker (pour la FIN)."""
+    out, seen = [], set()
+    for tr in mid.tracks:
+        t = 0
+        for msg in tr:
+            t += msg.time
+            if msg.is_meta and msg.type in ("marker","text","cue_marker") and hasattr(msg, "text"):
+                key = (t, msg.text.strip(), msg.type)
+                if key not in seen:
+                    seen.add(key); out.append(key)
+    out.sort(key=lambda x: x[0])
+    return out
+
+def find_bounds(markers_only, all_meta, label, fallback_end):
+    """start = 1er marker == label ; end = 1er meta (marker/text/cue) STRICTEMENT > start."""
+    start = None
+    for tick, text in markers_only:
+        if text == label:
+            start = tick
+            break
+    if start is None:
+        return None, None
+    end = None
+    for tick, _txt, _typ in all_meta:
+        if tick > start:
+            end = tick
+            break
+    if end is None:
+        end = fallback_end
+    if end <= start:
+        end = start + 1
+    return start, end
+
+def window_has_notes(mid, start_tick, end_tick):
+    if end_tick <= start_tick: return False
+    for tr in mid.tracks:
+        t = 0
+        for msg in tr:
+            t += msg.time
+            if start_tick <= t < end_tick:
+                if msg.type == "note_on" and getattr(msg, "velocity", 0) > 0:
+                    return True
+            elif t >= end_tick:
+                break
+    return False
+
+def copy_section(mid: MidiFile, start_tick: int, end_tick: int) -> MidiFile:
+    out = MidiFile(ticks_per_beat=mid.ticks_per_beat)
+    for src in mid.tracks:
+        dst = MidiTrack()
+        out.tracks.append(dst)
+
+        last_meta = {}          # tempo/time/key
+        last_cc_bank = {}       # (ch, cc0/32) -> val
+        last_prog = {}          # ch -> program
+        last_sysex = []         # sysex vus avant start
+        pending = {}            # (ch, note) -> any
+
+        t = 0
+        in_win = False
+        last_emit = start_tick
+
+        for msg in src:
+            t += msg.time
+
+            # État avant start
+            if t <= start_tick:
+                if msg.is_meta and msg.type in ("set_tempo","time_signature","key_signature"):
+                    last_meta[msg.type] = msg.copy(time=0)
+                elif msg.type == "control_change" and msg.control in (0,32):
+                    last_cc_bank[(msg.channel, msg.control)] = msg.value
+                elif msg.type == "program_change":
+                    last_prog[msg.channel] = msg.program
+                elif msg.type == "sysex":
+                    last_sysex.append(msg.copy(time=0))
+
+            # Copie [start, end)
+            if start_tick <= t < end_tick:
+                if not in_win:
+                    # inject état au début
+                    for s in last_sysex:
+                        dst.append(s.copy(time=0))
+                    for k in ("set_tempo","time_signature","key_signature"):
+                        if k in last_meta: dst.append(last_meta[k].copy(time=0))
+                    # bank select 0 puis 32
+                    by_ch = defaultdict(dict)
+                    for (ch, cc), val in last_cc_bank.items(): by_ch[ch][cc] = val
+                    for ch, m in by_ch.items():
+                        if 0 in m:  dst.append(Message("control_change", channel=ch, control=0,  value=m[0],  time=0))
+                        if 32 in m: dst.append(Message("control_change", channel=ch, control=32, value=m[32], time=0))
+                    for ch, prog in last_prog.items():
+                        dst.append(Message("program_change", channel=ch, program=prog, time=0))
+                    in_win = True
+                    last_emit = start_tick
+
+                # exclure meta de repère
+                if msg.is_meta and msg.type in ("marker","text","cue_marker"):
+                    continue
+
+                delta = int(t - last_emit)
+                dst.append(msg.copy(time=delta))
+                last_emit = t
+
+                if msg.type == "note_on" and getattr(msg, "velocity", 0) > 0:
+                    pending[(msg.channel, msg.note)] = True
+                elif msg.type == "note_off" or (msg.type == "note_on" and getattr(msg, "velocity", 0) == 0):
+                    pending.pop((msg.channel, msg.note), None)
+
+            if t >= end_tick:
                 break
 
-        if start_tick is None:
-            return {section_name: 0}
+        # clôture propre fin de piste
+        if in_win:
+            for (ch, note) in list(pending.keys()):
+                dst.append(Message("note_off", channel=ch, note=note, velocity=0, time=int(end_tick - last_emit)))
+                last_emit = end_tick
+            # sustain off + all notes off + reset controllers
+            for ch in range(16):
+                dst.append(Message("control_change", channel=ch, control=64,  value=0, time=0))
+                dst.append(Message("control_change", channel=ch, control=123, value=0, time=0))
+                dst.append(Message("control_change", channel=ch, control=121, value=0, time=0))
+    return out
 
-        if end_tick is None:
-            estimated_length_ticks = int(mid.length * ticks_per_beat * 4)
-            end_tick = estimated_length_ticks
-
-        for track in mid.tracks:
-            new_track = MidiTrack()
-            abs_time = 0
-            in_section = False
-            last_tick = 0
-            setup_msgs = []
-            pending_noteoffs = {}
-
-            for msg in track:
-                abs_time += msg.time
-                if not in_section and abs_time <= start_tick and (
-                    msg.type in ['set_tempo', 'key_signature', 'time_signature'] or
-                    (msg.type == 'control_change' and msg.control in [0, 32]) or
-                    msg.type in ['program_change', 'sysex']
-                ):
-                    setup_msgs.append(msg.copy(time=msg.time))
-
-                if start_tick <= abs_time <= end_tick:
-                    if not in_section:
-                        for sm in setup_msgs:
-                            sm.time = 0
-                            new_track.append(sm)
-                        in_section = True
-                        last_tick = start_tick
-
-                    delta = abs_time - last_tick
-                    new_track.append(msg.copy(time=delta))
-                    last_tick = abs_time
-
-                    if msg.type == 'note_on' and msg.velocity > 0:
-                        pending_noteoffs[(msg.channel, msg.note)] = last_tick
-                    elif msg.type == 'note_off' or (msg.type == 'note_on' and msg.velocity == 0):
-                        pending_noteoffs.pop((msg.channel, msg.note), None)
-
-                elif abs_time > end_tick:
-                    break
-
-            for (ch, note), t in pending_noteoffs.items():
-                delta = end_tick - last_tick
-                new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
-                last_tick = end_tick
-
-            out.tracks.append(new_track)
-
-        out.save(output_path)
-        return {section_name: 1}
-    except Exception:
-        print("Erreur dans extract_section:", traceback.format_exc(), file=sys.stderr)
-        return {section_name: 0}
-
+# --------------- batch ---------------
 def extract_all_sections(input_path, output_dir):
-    sections = [
-        'Intro A', 'Intro B', 'Intro C', 'Intro D',
-        'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
-        'Main A', 'Main B', 'Main C', 'Main D',
-        'Ending A', 'Ending B', 'Ending C', 'Ending D'
-    ]
-
-    result = {"sections": []}
-
     try:
         mid = MidiFile(input_path)
+        markers_only = build_markers_start(mid)
+        all_meta = build_all_meta(mid)
+        beat_base = os.path.basename(input_path)
+        beat_id = beat_base.split('_')[0] if '_' in beat_base else os.path.splitext(beat_base)[0]
 
-        # Extraire beatId à partir du nom de fichier input (ex: 9_full.mid -> 9)
-        basename = os.path.basename(input_path)
-        beat_id = basename.split('_')[0] if '_' in basename else 'unknown'
+        os.makedirs(output_dir, exist_ok=True)
+        items = []
 
-        for i, section in enumerate(sections):
-            next_section = sections[i + 1] if i + 1 < len(sections) else None
-            # Nom fichier MIDI avec beatId en préfixe et underscores au lieu d'espaces
-            filename = f"{beat_id}_{section.replace(' ', '_')}.mid"
-            output_file = os.path.join(output_dir, filename)
-            section_result = extract_section(mid, section, next_section, output_file)
-            if section_result.get(section) == 1:
-                result["sections"].append({
-                    "sectionName": section,
-                    "midFilename": filename,
-                    "url": f"{BASE_URL}/{filename}"
-                })
+        for label in ALL_LABELS:
+            start, end = find_bounds(markers_only, all_meta, label, file_end_tick(mid))
+            if start is None:           # pas trouvé
+                continue
+            if end <= start:             # fenêtre vide
+                continue
+            if not window_has_notes(mid, start, end):  # rien à jouer
+                continue
 
-        print(json.dumps(result, ensure_ascii=False))
+            outname = f"{beat_id}_{label.replace(' ', '_')}.mid"
+            outpath = os.path.join(output_dir, outname)
+            cut = copy_section(mid, start, end)
+            cut.save(outpath)
 
-    except Exception as e:
-        err_json = json.dumps({"error": f"Erreur générale : {str(e)}"})
-        print(err_json, file=sys.stderr)
-        print(err_json)
+            items.append({
+                "sectionName": label,
+                "midFilename": outname,
+                "url": f"{BASE_URL}/{outname}"
+            })
+
+        print(json.dumps({"sections": items}, ensure_ascii=False))
+        return 0
+    except Exception:
+        err = {"error": "exception", "trace": traceback.format_exc()}
+        print(json.dumps(err))
+        return 1
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         print("Usage: python3 extract_all_sections.py input_full.mid output_dir")
         sys.exit(1)
-
-    input_full_mid = sys.argv[1]
-    output_dir = sys.argv[2]
-
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    extract_all_sections(input_full_mid, output_dir)
+    sys.exit(extract_all_sections(sys.argv[1], sys.argv[2]))
