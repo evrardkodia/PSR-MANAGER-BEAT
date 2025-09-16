@@ -1,4 +1,4 @@
-from mido import MidiFile, MidiTrack, Message, MetaMessage
+from mido import MidiFile, MidiTrack, Message
 import sys
 import os
 import traceback
@@ -7,52 +7,63 @@ import traceback
 DEBUG_LOG = os.path.join(os.path.dirname(__file__), 'python_debug.log')
 
 def log_debug(message):
-    with open(DEBUG_LOG, 'a', encoding='utf-8') as f:
-        f.write(message + '\n')
+    try:
+        with open(DEBUG_LOG, 'a', encoding='utf-8') as f:
+            f.write(message + '\n')
+    except Exception:
+        pass
+
+def build_markers(mid: MidiFile):
+    """Retourne la timeline triée de TOUS les marqueurs: [(tick, label)]."""
+    marks = []
+    for track in mid.tracks:
+        abs_time = 0
+        for msg in track:
+            abs_time += msg.time
+            if msg.is_meta and msg.type == 'marker' and hasattr(msg, 'text'):
+                marks.append((abs_time, msg.text.strip()))
+    marks.sort(key=lambda x: x[0])
+    return marks
+
+def total_ticks(mid: MidiFile) -> int:
+    """Tick de fin réelle (max de toutes les pistes)."""
+    m = 0
+    for tr in mid.tracks:
+        t = 0
+        for msg in tr:
+            t += msg.time
+        if t > m:
+            m = t
+    return m
 
 def extract_section(input_path, output_path, section_name):
+    """
+    Découpe stricte = [start_marker, prochain_marker):
+      - start = tick du marqueur 'section_name'
+      - end   = tick du 1er marqueur STRICTEMENT après start (quel qu'il soit)
+      - si pas de marqueur suivant -> end = fin réelle (max ticks)
+    Sortie sans meta 'marker'. Pas d'injection tempo/sysex/bank/etc.
+    """
     try:
         log_debug(f"Début extraction section '{section_name}' depuis {input_path}")
 
         mid = MidiFile(input_path)
-        ticks_per_beat = mid.ticks_per_beat
-        out = MidiFile(ticks_per_beat=ticks_per_beat)
+        out = MidiFile(ticks_per_beat=mid.ticks_per_beat)
 
-        start_tick = None
-        end_tick = None
-
-        # Ordre logique étendu des sections Yamaha
-        section_order = [
-            'Intro A', 'Intro B', 'Intro C', 'Intro D',
-            'Fill In AA', 'Fill In BB', 'Fill In CC', 'Fill In DD',
-            'Main A', 'Main B', 'Main C', 'Main D',
-            'Ending A', 'Ending B', 'Ending C', 'Ending D'
-        ]
-
-        try:
-            index = section_order.index(section_name)
-        except ValueError:
-            err_msg = f"Erreur : section '{section_name}' non reconnue"
+        # --- 1) Timeline des marqueurs (toutes pistes)
+        markers = build_markers(mid)
+        if not markers:
+            err_msg = "Aucun marqueur trouvé dans le MIDI."
             print(err_msg)
             log_debug(err_msg)
             return False, 0.0
 
-        next_section = section_order[index + 1] if index + 1 < len(section_order) else None
-
-        # Recherche des marqueurs de début et fin de section
-        for track in mid.tracks:
-            abs_time = 0
-            for msg in track:
-                abs_time += msg.time
-                if msg.type == 'marker':
-                    label = msg.text.strip()
-                    if label == section_name and start_tick is None:
-                        start_tick = abs_time
-                        log_debug(f"Début section trouvé à tick {start_tick}")
-                    elif label == next_section and start_tick is not None:
-                        end_tick = abs_time
-                        log_debug(f"Fin section trouvé à tick {end_tick}")
-                        break
+        # --- 2) start = tick du marqueur demandé
+        start_tick = None
+        for tick, label in markers:
+            if label == section_name:
+                start_tick = tick
+                break
 
         if start_tick is None:
             err_msg = f"Erreur : section '{section_name}' non trouvée"
@@ -60,66 +71,69 @@ def extract_section(input_path, output_path, section_name):
             log_debug(err_msg)
             return False, 0.0
 
-        if end_tick is None:
-            end_tick = int(mid.length * ticks_per_beat * 2)
-            log_debug(f"Aucune fin section trouvée, estimation à tick {end_tick}")
+        log_debug(f"[{section_name}] start_tick={start_tick}")
 
-        # Extraire les messages MIDI pour cette section
+        # --- 3) end = 1er marqueur strictement après start (indifférent du libellé)
+        end_tick = None
+        for tick, _ in markers:
+            if tick > start_tick:
+                end_tick = tick
+                break
+
+        if end_tick is None:
+            end_tick = total_ticks(mid)  # fin réelle du morceau
+            log_debug(f"[{section_name}] pas de prochain marqueur → end_tick=fin réelle {end_tick}")
+        else:
+            log_debug(f"[{section_name}] end_tick(prochain marqueur)={end_tick}")
+
+        # garde-fou: intervalle non nul
+        if end_tick <= start_tick:
+            end_tick = start_tick + 1
+            log_debug(f"[{section_name}] garde-fou → end_tick={end_tick}")
+
+        # --- 4) Copie brute des événements dans [start_tick, end_tick), sans 'marker'
         for track in mid.tracks:
             new_track = MidiTrack()
+            out.tracks.append(new_track)
+
             abs_time = 0
-            in_section = False
-            last_tick = 0
-            setup_msgs = []
-            pending_noteoffs = {}
+            last_emit = start_tick
+            pending_noteoffs = set()  # {(ch, note)}
 
             for msg in track:
                 abs_time += msg.time
 
-                # Sauvegarde des messages setup avant la section
-                if abs_time <= start_tick and (
-                    msg.type in ['set_tempo', 'key_signature', 'time_signature', 'smpte_offset'] or
-                    (msg.type == 'control_change' and msg.control in [0, 32]) or
-                    msg.type in ['program_change', 'pitchwheel', 'sysex']
-                ):
-                    setup_msgs.append(msg.copy(time=int(msg.time)))
+                if start_tick <= abs_time < end_tick:
+                    # ignorer les meta 'marker' dans la sortie
+                    if msg.is_meta and msg.type == 'marker':
+                        continue
 
-                if start_tick <= abs_time <= end_tick:
-                    if not in_section:
-                        # Ajout des messages setup au début de la section
-                        for sm in setup_msgs:
-                            sm.time = 0
-                            new_track.append(sm.copy(time=0))
-                        in_section = True
-                        last_tick = start_tick
-
-                    delta = int(abs_time - last_tick)
+                    delta = int(abs_time - last_emit)
                     new_track.append(msg.copy(time=delta))
-                    last_tick = abs_time
+                    last_emit = abs_time
 
-                    if msg.type == 'note_on' and msg.velocity > 0:
-                        pending_noteoffs[(msg.channel, msg.note)] = last_tick
-                    elif msg.type in ('note_off',) or (msg.type == 'note_on' and msg.velocity == 0):
-                        pending_noteoffs.pop((msg.channel, msg.note), None)
+                    # suivi des notes à fermer proprement
+                    if msg.type == 'note_on' and getattr(msg, 'velocity', 0) > 0:
+                        pending_noteoffs.add((msg.channel, msg.note))
+                    elif msg.type == 'note_off' or (msg.type == 'note_on' and getattr(msg, 'velocity', 0) == 0):
+                        pending_noteoffs.discard((msg.channel, msg.note))
 
-                elif abs_time > end_tick:
+                elif abs_time >= end_tick:
                     break
 
-            # Ajouter les note_off manquants à la fin
-            for (ch, note), t in pending_noteoffs.items():
-                delta = int(end_tick - last_tick)
+            # Ajouter les note_off manquants exactement à end_tick
+            for ch, note in list(pending_noteoffs):
+                delta = int(end_tick - last_emit)
                 new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
-                last_tick = end_tick
-
-            out.tracks.append(new_track)
+                last_emit = end_tick
 
         out.save(output_path)
         log_debug(f"Section extraite sauvegardée dans {output_path}")
 
         extracted = MidiFile(output_path)
         duration = round(extracted.length, 3)
-        print(duration)
-        log_debug(f"Durée MIDI extraite : {duration}s")
+        print(duration)  # certaines routes lisent la durée sur stdout
+        log_debug(f"Durée MIDI extraite : {duration}s (start={start_tick}, end={end_tick})")
 
         return True, duration
 
@@ -131,8 +145,12 @@ def extract_section(input_path, output_path, section_name):
 
 
 if __name__ == "__main__":
+    # reset log
     if os.path.exists(DEBUG_LOG):
-        os.remove(DEBUG_LOG)
+        try:
+            os.remove(DEBUG_LOG)
+        except Exception:
+            pass
 
     if len(sys.argv) != 4:
         usage = "Usage: python extract_main.py input.mid output.mid section_name"
