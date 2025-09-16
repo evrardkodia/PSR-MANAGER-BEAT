@@ -164,7 +164,7 @@ function convertMidToWavAsync(midPath, wavPath) {
 }
 
 // Coupe le WAV exactement à la durée souhaitée (petite marge anti-click)
-const TAIL_EARLY_MS = 0.003; // ← 3 ms seulement ; passe à 0.000 si la boucle te paraît encore trop rapide
+const TAIL_EARLY_MS = 0.000; // ← 3 ms seulement ; passe à 0.000 si la boucle te paraît encore trop rapide
 function hardTrimToDuration(wavPath, seconds) {
   const out = wavPath.replace(/\.wav$/i, '.tight.wav');
   const target = Math.max(0, Number(seconds) - TAIL_EARLY_MS);
