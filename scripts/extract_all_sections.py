@@ -1,147 +1,92 @@
-import sys
-import os
-import json
-import traceback
-from mido import MidiFile, MidiTrack, Message
-
-BASE_URL = "https://psr-manager-beat.onrender.com/temp"
-
-# --------- utils ---------
-def norm_label(s: str) -> str:
-    # normalise: trim, lower, remplace _ par espace, compresse espaces
-    return " ".join(s.strip().lower().replace("_", " ").split())
-
-def total_ticks(mid: MidiFile) -> int:
-    m = 0
-    for tr in mid.tracks:
-        t = 0
-        for msg in tr:
-            t += msg.time
-        if t > m:
-            m = t
-    return m
-
-def build_markers(mid: MidiFile):
-    """Retourne une liste triée [(tick, raw_text, norm_text)] de TOUS les marqueurs du fichier."""
-    marks = []
-    for tr in mid.tracks:
-        abs_t = 0
-        for msg in tr:
-            abs_t += msg.time
-            if msg.is_meta and msg.type == "marker" and hasattr(msg, "text"):
-                raw = msg.text.strip()
-                marks.append((abs_t, raw, norm_label(raw)))
-    marks.sort(key=lambda x: x[0])
-    return marks
-
-# --------- extraction robuste: [start, prochain marqueur) ---------
-def extract_section(mid: MidiFile, section_name: str, _next_section_name_unused, output_path: str):
+def extract_section(mid, section_name, _next_section_name_unused, output_path):
+    """
+    Coupe la section [start_marker, prochain_marker) :
+    - start = tick du marqueur 'section_name'
+    - end   = tick du 1er marqueur strictement après start (peu importe son libellé)
+    - si pas de marqueur après: end = fin réelle du morceau
+    - on n'exporte pas les meta 'marker'
+    """
     try:
-        tpb = mid.ticks_per_beat
-        out = MidiFile(ticks_per_beat=tpb)
+        out = MidiFile(ticks_per_beat=mid.ticks_per_beat)
 
-        marks = build_markers(mid)
-        wanted = norm_label(section_name)
+        # 1) Construire la timeline de TOUS les marqueurs (tick, label), toutes pistes confondues
+        markers = []
+        for track in mid.tracks:
+            abs_time = 0
+            for msg in track:
+                abs_time += msg.time
+                if msg.is_meta and msg.type == 'marker' and hasattr(msg, 'text'):
+                    markers.append((abs_time, msg.text.strip()))
+        markers.sort(key=lambda x: x[0])
 
-        # start = tick du marqueur exact (normalisé)
+        # 2) start = tick du marqueur 'section_name'
         start_tick = None
-        end_tick = None
-
-        for i, (tick, raw, normed) in enumerate(marks):
-            if normed == wanted:
+        for i, (tick, label) in enumerate(markers):
+            if label == section_name:
                 start_tick = tick
-                # end = tick du prochain marqueur (peu importe son nom)
-                if i + 1 < len(marks):
-                    end_tick = marks[i + 1][0]
                 break
-
         if start_tick is None:
-            # section introuvable
             return {section_name: 0}
 
+        # 3) end = tick du PREMIER marqueur STRICTEMENT après start_tick (quel qu'il soit)
+        end_tick = None
+        for tick, _ in markers:
+            if tick > start_tick:
+                end_tick = tick
+                break
         if end_tick is None:
-            # pas de marqueur suivant -> fin = fin réelle du morceau
-            end_tick = total_ticks(mid)
+            # pas de marqueur suivant -> fin réelle (max des ticks)
+            end_tick = 0
+            for tr in mid.tracks:
+                t = 0
+                for msg in tr:
+                    t += msg.time
+                if t > end_tick:
+                    end_tick = t
 
-        # copie fenêtre [start_tick, end_tick)
-        for src in mid.tracks:
-            dst = MidiTrack()
-            out.tracks.append(dst)
+        # garde-fou: au moins 1 tick
+        if end_tick <= start_tick:
+            end_tick = start_tick + 1
 
-            # états à réinjecter
-            last_meta = {}         # 'set_tempo','time_signature','key_signature'
-            bank = {}              # ch -> {0:val, 32:val}
-            last_prog = {}         # ch -> program
-            sysex_list = []        # sysex à rejouer
+        # 4) Copier bruts les événements dans [start_tick, end_tick), sans ré-injecter de setup (comme demandé)
+        for track in mid.tracks:
+            new_track = MidiTrack()
+            out.tracks.append(new_track)
 
-            # notes en cours
-            pending = {}
+            abs_time = 0
+            last_emit = start_tick
+            pending_notes = set()  # {(ch, note)}
 
-            abs_t = 0
-            in_win = False
-            last_emit = start_tick  # point de référence pour deltas
+            for msg in track:
+                abs_time += msg.time
 
-            # on parcourt la piste
-            for msg in src:
-                abs_t += msg.time
-
-                # collecter état avant fenêtre
-                if not in_win and abs_t <= start_tick:
-                    if msg.is_meta and msg.type in ('set_tempo', 'time_signature', 'key_signature'):
-                        last_meta[msg.type] = msg.copy(time=0)
-                    elif msg.type == 'control_change' and msg.control in (0, 32):
-                        bank.setdefault(msg.channel, {})[msg.control] = msg.value
-                    elif msg.type == 'program_change':
-                        last_prog[msg.channel] = msg.program
-                    elif msg.type == 'sysex':
-                        sysex_list.append(msg.copy(time=0))
-
-                # dans la fenêtre
-                if start_tick <= abs_t < end_tick:
-                    if not in_win:
-                        # injecter l'état de départ
-                        for s in sysex_list:
-                            dst.append(s.copy(time=0))
-                        for t in ('set_tempo','time_signature','key_signature'):
-                            if t in last_meta:
-                                dst.append(last_meta[t].copy(time=0))
-                        # bank select: 0 puis 32 (si présents)
-                        for ch, vals in bank.items():
-                            if 0 in vals:
-                                dst.append(Message('control_change', channel=ch, control=0, value=vals[0], time=0))
-                            if 32 in vals:
-                                dst.append(Message('control_change', channel=ch, control=32, value=vals[32], time=0))
-                        for ch, prog in last_prog.items():
-                            dst.append(Message('program_change', channel=ch, program=prog, time=0))
-
-                        in_win = True
-                        last_emit = start_tick
-
-                    # ignorer les meta 'marker' dans le rendu de section
+                if start_tick <= abs_time < end_tick:
+                    # ignorer les meta 'marker' dans la sortie
                     if msg.is_meta and msg.type == 'marker':
                         continue
 
-                    delta = int(abs_t - last_emit)
-                    dst.append(msg.copy(time=delta))
-                    last_emit = abs_t
+                    delta = int(abs_time - last_emit)
+                    new_track.append(msg.copy(time=delta))
+                    last_emit = abs_time
 
-                    # suivi des notes
+                    # suivi des notes pour fermer proprement à la fin
                     if msg.type == 'note_on' and getattr(msg, 'velocity', 0) > 0:
-                        pending[(msg.channel, msg.note)] = last_emit
+                        pending_notes.add((msg.channel, msg.note))
                     elif msg.type == 'note_off' or (msg.type == 'note_on' and getattr(msg, 'velocity', 0) == 0):
-                        pending.pop((msg.channel, msg.note), None)
+                        pending_notes.discard((msg.channel, msg.note))
 
-                elif abs_t >= end_tick:
+                elif abs_time >= end_tick:
                     break
 
-            # fermer les notes qui restent ouvertes à end_tick
-            for (ch, note), _ in list(pending.items()):
+            # 5) Fermer les notes encore ouvertes exactement à end_tick
+            for ch, note in list(pending_notes):
                 delta = int(end_tick - last_emit)
-                dst.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
+                new_track.append(Message('note_off', channel=ch, note=note, velocity=0, time=delta))
                 last_emit = end_tick
 
         out.save(output_path)
         return {section_name: 1}
+
     except Exception:
         print("Erreur dans extract_section:", traceback.format_exc(), file=sys.stderr)
         return {section_name: 0}
