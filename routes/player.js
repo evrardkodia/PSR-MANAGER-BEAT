@@ -166,7 +166,7 @@ function convertMidToWavAsync(midPath, wavPath) {
 // Coupe le WAV exactement à la durée souhaitée (avec 5 ms de marge)
 function hardTrimToDuration(wavPath, seconds) {
   const out = wavPath.replace(/\.wav$/i, '.tight.wav');
-  const target = Math.max(0, Number(seconds) - 0.005); // 5ms d’air
+  const target = Math.max(0, Number(seconds) - 0.020); // 5ms d’air
   const args = ['-y', '-i', wavPath, '-t', `${target}`, '-acodec', 'pcm_s16le', '-ar', '44100', out];
   const p = spawnSync(FFMPEG_EXE, args, { encoding: 'utf-8' });
   if (p.status !== 0) {
