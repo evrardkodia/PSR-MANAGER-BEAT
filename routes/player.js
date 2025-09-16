@@ -75,7 +75,7 @@ function convertMidToWav(midPath, wavPath) {
 
   const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
-  // 1) timidity SANS --preserve-silence + effets coupés
+  // 1) timidity SANS --preserve-silence et SANS reverb/chorus
   const tArgs = [
     '-c', TIMIDITY_CFG_PATH, '-Ow',
     '-A120',
@@ -89,9 +89,7 @@ function convertMidToWav(midPath, wavPath) {
     throw new Error(`Timidity a échoué (${t.status ?? 'n/a'})`);
   }
 
-  // 2) ffmpeg: fin puis début
-  //   - on reverse, on retire le "début" (qui est en fait la fin originale), on re-reverse,
-  //   - puis on retire le vrai début.
+  // 2) ffmpeg : trim FIN puis DÉBUT (ultra robuste)
   const filter =
     'areverse,' +
     'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-35dB,' +
@@ -121,6 +119,7 @@ function convertMidToWavAsync(midPath, wavPath) {
 
     const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
+    // 1) timidity (mêmes options que sync)
     const tArgs = [
       '-c', TIMIDITY_CFG_PATH, '-Ow',
       '-A120',
@@ -128,7 +127,6 @@ function convertMidToWavAsync(midPath, wavPath) {
       '-o', tempWav, midPath
     ];
     const t = spawn(TIMIDITY_EXE, tArgs);
-
     let tErr = '';
     t.stderr.on('data', d => { tErr += d.toString(); });
     t.on('error', reject);
@@ -138,6 +136,7 @@ function convertMidToWavAsync(midPath, wavPath) {
         return reject(new Error(`Timidity exit ${code}: ${tErr}`));
       }
 
+      // 2) ffmpeg : trim FIN puis DÉBUT (même filtre)
       const filter =
         'areverse,' +
         'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-35dB,' +
@@ -151,7 +150,6 @@ function convertMidToWavAsync(midPath, wavPath) {
         wavPath
       ];
       const f = spawn(FFMPEG_EXE, fArgs);
-
       let fErr = '';
       f.stderr.on('data', d => { fErr += d.toString(); });
       f.on('error', reject);
@@ -164,6 +162,7 @@ function convertMidToWavAsync(midPath, wavPath) {
     });
   });
 }
+
 
 function hardTrimToDuration(wavPath, seconds) {
   const out = wavPath.replace(/\.wav$/i, '.tight.wav');
