@@ -71,34 +71,111 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
 }
 
 function convertMidToWav(midPath, wavPath) {
-  console.log('🎶 Conversion MIDI → WAV avec Timidity');
-  
-  // Étape 1 : Conversion MIDI → WAV brut
-  const tempWav = wavPath.replace(/\.wav$/, '_temp.wav');
-  const args = ['-c', TIMIDITY_CFG_PATH, '-Ow', '--preserve-silence', '-A120', '-o', tempWav, midPath];
-  const convertProcess = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8' });
+  console.log('🎶 Conversion MIDI → WAV (sync) + hard trim');
 
-  if (convertProcess.error) throw convertProcess.error;
-  if (convertProcess.status !== 0) {
-    console.error('❌ Timidity stderr:', convertProcess.stderr);
-    throw new Error(`Timidity a échoué avec le code ${convertProcess.status}`);
+  const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
+
+  // 1) timidity SANS --preserve-silence + effets coupés
+  const tArgs = [
+    '-c', TIMIDITY_CFG_PATH, '-Ow',
+    '-A120',
+    '-EFreverb=0','-EFchorus=0',
+    '-o', tempWav, midPath
+  ];
+  const t = spawnSync(TIMIDITY_EXE, tArgs, { encoding: 'utf-8' });
+  if (t.error || t.status !== 0) {
+    console.error('❌ timidity stderr:', t.stderr);
+    try { fs.unlinkSync(tempWav); } catch {}
+    throw new Error(`Timidity a échoué (${t.status ?? 'n/a'})`);
   }
 
-  // Étape 2 : Rogner le silence en début et fin avec ffmpeg
-  // Ici on coupe 0.05s au début et fin, ajustable selon ton silence
-  const trimArgs = ['-i', tempWav, '-af', 'atrim=start=0.05', '-c', 'copy', wavPath];
-  const trimProcess = spawnSync(FFMPEG_EXE, trimArgs, { encoding: 'utf-8' });
+  // 2) ffmpeg: fin puis début
+  //   - on reverse, on retire le "début" (qui est en fait la fin originale), on re-reverse,
+  //   - puis on retire le vrai début.
+  const filter =
+    'areverse,' +
+    'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-35dB,' +
+    'areverse,' +
+    'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
 
-  if (trimProcess.error) throw trimProcess.error;
-  if (trimProcess.status !== 0) {
-    console.error('❌ ffmpeg stderr:', trimProcess.stderr);
-    throw new Error('Échec du rognage du silence avec ffmpeg');
+  const fArgs = [
+    '-y','-i', tempWav,
+    '-af', filter,
+    '-acodec','pcm_s16le','-ar','44100',
+    wavPath
+  ];
+  const f = spawnSync(FFMPEG_EXE, fArgs, { encoding: 'utf-8' });
+  if (f.error || f.status !== 0) {
+    console.error('❌ ffmpeg stderr:', f.stderr);
+    try { fs.unlinkSync(tempWav); } catch {}
+    throw new Error(`ffmpeg trimming a échoué (${f.status ?? 'n/a'})`);
   }
 
-  fs.unlinkSync(tempWav); // supprime le fichier temporaire
-  console.log('✅ Conversion terminée et silence supprimé');
+  try { fs.unlinkSync(tempWav); } catch {}
+  console.log('✅ Conversion + hard trim OK →', wavPath);
 }
 
+function convertMidToWavAsync(midPath, wavPath) {
+  return new Promise((resolve, reject) => {
+    console.log('🎶 Conversion MIDI → WAV (async) + hard trim');
+
+    const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
+
+    const tArgs = [
+      '-c', TIMIDITY_CFG_PATH, '-Ow',
+      '-A120',
+      '-EFreverb=0','-EFchorus=0',
+      '-o', tempWav, midPath
+    ];
+    const t = spawn(TIMIDITY_EXE, tArgs);
+
+    let tErr = '';
+    t.stderr.on('data', d => { tErr += d.toString(); });
+    t.on('error', reject);
+    t.on('close', code => {
+      if (code !== 0) {
+        try { fs.unlinkSync(tempWav); } catch {}
+        return reject(new Error(`Timidity exit ${code}: ${tErr}`));
+      }
+
+      const filter =
+        'areverse,' +
+        'silenceremove=start_periods=1:start_silence=0.05:start_threshold=-35dB,' +
+        'areverse,' +
+        'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
+
+      const fArgs = [
+        '-y','-i', tempWav,
+        '-af', filter,
+        '-acodec','pcm_s16le','-ar','44100',
+        wavPath
+      ];
+      const f = spawn(FFMPEG_EXE, fArgs);
+
+      let fErr = '';
+      f.stderr.on('data', d => { fErr += d.toString(); });
+      f.on('error', reject);
+      f.on('close', code2 => {
+        try { fs.unlinkSync(tempWav); } catch {}
+        if (code2 !== 0) return reject(new Error(`ffmpeg exit ${code2}: ${fErr}`));
+        console.log('✅ Conversion + hard trim OK →', wavPath);
+        resolve();
+      });
+    });
+  });
+}
+
+function hardTrimToDuration(wavPath, seconds) {
+  const out = wavPath.replace(/\.wav$/i, '.tight.wav');
+  const eps = Math.max(0, seconds - 0.005); // laisse 5ms d’air
+  const args = ['-y','-i', wavPath, '-t', `${eps}`, '-acodec','pcm_s16le','-ar','44100', out];
+  const p = spawnSync(FFMPEG_EXE, args, { encoding: 'utf-8' });
+  if (p.status !== 0) {
+    console.error('ffmpeg trim -t stderr:', p.stderr);
+    throw new Error('hardTrimToDuration failed');
+  }
+  fs.renameSync(out, wavPath);
+}
 
 
 function trimWavFile(wavPath, duration) {
