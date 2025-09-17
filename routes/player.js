@@ -10,6 +10,31 @@ const { createClient } = require('@supabase/supabase-js');
 
 console.log("🚀 routes/player.js chargé");
 
+// ──────────────────────────────────────────────────────────────
+// CORS (router-level)
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || [
+  'https://psr-managers-styles.onrender.com',
+  'http://localhost:3000',
+  'http://localhost:5173'
+]).toString().split(',').map(s => s.trim());
+
+router.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true'); // si tu envoies des cookies/headers auth
+  }
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  // reflète ce que le navigateur demande ou mets une liste par défaut:
+  res.setHeader('Access-Control-Allow-Headers',
+    req.headers['access-control-request-headers'] || 'Content-Type, Authorization'
+  );
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+// ──────────────────────────────────────────────────────────────
+
 // Chemins
 const TIMIDITY_EXE = 'timidity';
 const TEMP_DIR = path.join(__dirname, '..', 'temp');
@@ -20,7 +45,7 @@ const FFPROBE_EXE = 'ffprobe';
 // Utilise la variable d'environnement FFMPEG_PATH ou 'ffmpeg' par défaut
 const FFMPEG_EXE = process.env.FFMPEG_PATH || 'ffmpeg';
 
-// >>>>>>> AJOUT: Fluidsynth prioritaire
+// Fluidsynth prioritaire
 const FLUIDSYNTH_EXE = process.env.FLUIDSYNTH_PATH || 'fluidsynth';
 
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
@@ -38,7 +63,6 @@ function publicBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
-// >>>>>>> AJOUT: détection binaire
 function binExists(cmd) {
   try {
     const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf-8' });
@@ -84,7 +108,6 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
    Lecture du tempo et de la signature depuis le MIDI (Python)
    ────────────────────────────────────────────────────────────── */
 function readMidiMeta(midPath) {
-  // Renvoie { bpm, ts_num, ts_den } (défauts Yamaha 120 / 4/4 si absent)
   const py = `
 from mido import MidiFile, tempo2bpm
 import json, sys
@@ -124,7 +147,6 @@ print(json.dumps({"bpm": bpm, "ts_num": num, "ts_den": den}))
    Quantification de durée sur un nombre ENTIER de mesures
    ────────────────────────────────────────────────────────────── */
 function quantizeDurationToBars(rawSeconds, bpm, ts_num) {
-  // barDur = (60/bpm) * ts_num ; on arrondit au nombre de mesures le + proche
   const bar = (60 / (bpm || 120)) * (ts_num || 4);
   if (!isFinite(bar) || bar <= 0) return rawSeconds;
   const bars = Math.max(1, Math.round(rawSeconds / bar));
@@ -132,10 +154,9 @@ function quantizeDurationToBars(rawSeconds, bpm, ts_num) {
 }
 
 // --- Conversion + trims ---
-// >>>>>>> MODIFIÉ: priorité Fluidsynth, fallback TiMidity (cfg minimal)
+// Priorité Fluidsynth, fallback TiMidity (cfg minimal)
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion MIDI → WAV (préférence fluidsynth)');
-
   if (!fs.existsSync(SF2_PATH)) {
     throw new Error(`SoundFont introuvable: ${SF2_PATH}`);
   }
@@ -143,7 +164,6 @@ function convertMidToWav(midPath, wavPath) {
   const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
   if (binExists(FLUIDSYNTH_EXE)) {
-    // FLUIDSYNTH → WAV (offline)
     const fArgs = [
       '-ni', SF2_PATH, midPath,
       '-F', tempWav, '-r', '44100',
@@ -158,19 +178,9 @@ function convertMidToWav(midPath, wavPath) {
       throw new Error(`fluidsynth a échoué (${p.status ?? 'n/a'})`);
     }
   } else {
-    // TiMidity++ avec cfg minimal (pas de fallback caché)
     const tmpCfg = path.join(TEMP_DIR, `timidity_min_${Date.now()}.cfg`);
-    fs.writeFileSync(tmpCfg, [
-      `soundfont ${SF2_PATH}`,
-      `dir .`
-    ].join('\n'));
-
-    const tArgs = [
-      '-c', tmpCfg, '-Ow',
-      '-A120',
-      '-EFreverb=0','-EFchorus=0',
-      '-o', tempWav, midPath
-    ];
+    fs.writeFileSync(tmpCfg, [`soundfont ${SF2_PATH}`, `dir .`].join('\n'));
+    const tArgs = ['-c', tmpCfg, '-Ow', '-A120', '-EFreverb=0','-EFchorus=0', '-o', tempWav, midPath];
     const t = spawnSync(TIMIDITY_EXE, tArgs, { encoding: 'utf-8' });
     try { fs.unlinkSync(tmpCfg); } catch {}
     if (t.error || t.status !== 0) {
@@ -180,19 +190,13 @@ function convertMidToWav(midPath, wavPath) {
     }
   }
 
-  // ffmpeg : trim FIN puis DÉBUT (inchangé)
   const filter =
     'areverse,' +
     'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
     'areverse,' +
     'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
 
-  const fArgs2 = [
-    '-y','-i', tempWav,
-    '-af', filter,
-    '-acodec','pcm_s16le','-ar','44100',
-    wavPath
-  ];
+  const fArgs2 = ['-y','-i', tempWav, '-af', filter, '-acodec','pcm_s16le','-ar','44100', wavPath];
   const f = spawnSync(FFMPEG_EXE, fArgs2, { encoding: 'utf-8' });
   if (f.error || f.status !== 0) {
     console.error('❌ ffmpeg stderr:', f.stderr);
@@ -204,14 +208,10 @@ function convertMidToWav(midPath, wavPath) {
   console.log('✅ Conversion + hard trim OK →', wavPath);
 }
 
-// >>>>>>> MODIFIÉ: version async avec même logique
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
     console.log('🎶 Conversion MIDI → WAV (async, préférence fluidsynth)');
-
-    if (!fs.existsSync(SF2_PATH)) {
-      return reject(new Error(`SoundFont introuvable: ${SF2_PATH}`));
-    }
+    if (!fs.existsSync(SF2_PATH)) return reject(new Error(`SoundFont introuvable: ${SF2_PATH}`));
 
     const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
@@ -221,7 +221,6 @@ function convertMidToWavAsync(midPath, wavPath) {
         'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
         'areverse,' +
         'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
-
       const fArgs = ['-y','-i', tempWav, '-af', filter, '-acodec','pcm_s16le','-ar','44100', wavPath];
       const f = spawn(FFMPEG_EXE, fArgs);
       let fErr = '';
@@ -237,11 +236,7 @@ function convertMidToWavAsync(midPath, wavPath) {
 
     const runTimidity = () => {
       const tmpCfg = path.join(TEMP_DIR, `timidity_min_${Date.now()}.cfg`);
-      fs.writeFileSync(tmpCfg, [
-        `soundfont ${SF2_PATH}`,
-        `dir .`
-      ].join('\n'));
-
+      fs.writeFileSync(tmpCfg, [`soundfont ${SF2_PATH}`, `dir .`].join('\n'));
       const tArgs = ['-c', tmpCfg, '-Ow', '-A120', '-EFreverb=0','-EFchorus=0', '-o', tempWav, midPath];
       const t = spawn(TIMIDITY_EXE, tArgs);
       let tErr = '';
@@ -282,8 +277,7 @@ function convertMidToWavAsync(midPath, wavPath) {
   });
 }
 
-// Coupe le WAV exactement à la durée souhaitée (petite marge anti-click)
-// Tu peux ajuster TAIL_EARLY_MS si la boucle te paraît encore trop pressée
+// Coupe le WAV exactement à la durée souhaitée
 const TAIL_EARLY_MS = 0.000;
 function hardTrimToDuration(wavPath, seconds) {
   const out = wavPath.replace(/\.wav$/i, '.tight.wav');
@@ -309,7 +303,7 @@ function getWavDurationSec(wavPath) {
   }
 }
 
-// Lit la durée MIDI (en s) du .mid (via python + mido)
+// Lit la durée MIDI (en s) du .mid
 function getMidiDurationSec(midPath) {
   try {
     const code = 'from mido import MidiFile; import sys; print(MidiFile(sys.argv[1]).length)';
@@ -350,7 +344,7 @@ router.post('/prepare-main', async (req, res) => {
     const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
     const sectionName = `Main ${mainLetter}`;
     const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionName);
-    let duration = parseFloat(stdout.trim()); // durée MIDI de la section (si renvoyée)
+    let duration = parseFloat(stdout.trim());
     if (!Number.isFinite(duration) || duration <= 0) {
       duration = getMidiDurationSec(rawMidPath);
     }
@@ -365,9 +359,11 @@ router.post('/prepare-main', async (req, res) => {
       return res.status(500).json({ error: 'Fichier WAV manquant après conversion' });
     }
 
-    // 🔁 Quantifie la durée au nombre ENTIER de mesures
-    const meta = readMidiMeta(rawMidPath); // { bpm, ts_num, ts_den }
-    const targetSec = quantizeDurationToBars(duration || getMidiDurationSec(rawMidPath) || getWavDurationSec(wavPath), meta.bpm, meta.ts_num);
+    const meta = readMidiMeta(rawMidPath);
+    const targetSec = quantizeDurationToBars(
+      duration || getMidiDurationSec(rawMidPath) || getWavDurationSec(wavPath),
+      meta.bpm, meta.ts_num
+    );
     if (targetSec && targetSec > 0) hardTrimToDuration(wavPath, targetSec);
 
     const wavUrl = `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`;
@@ -380,7 +376,7 @@ router.post('/prepare-main', async (req, res) => {
   }
 });
 
-// --- Log de la structure de sections ---
+// Log de la structure de sections
 router.post('/prepare-all', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-all appelée');
   const { beatId } = req.body;
@@ -494,25 +490,20 @@ router.get('/list-temps', async (req, res) => {
 });
 
 // --- Préparation + manifest séquenceur (gapless & transitions) ---
-
 const supabase = createClient(
-  process.env.SUPABASE_URL,               // https://swtbkiudmfvnywcgpzfe.supabase.co
-  process.env.SUPABASE_SERVICE_ROLE_KEY    // clé service_role
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 router.post('/prepare-all-sections', async (req, res) => {
   console.log('➡️ POST /api/player/prepare-all-sections appelée');
   const { beatId } = req.body;
 
-  if (!beatId) {
-    return res.status(400).json({ error: 'beatId est requis' });
-  }
+  if (!beatId) return res.status(400).json({ error: 'beatId est requis' });
 
   try {
     const beat = await prisma.beat.findUnique({ where: { id: beatId } });
-    if (!beat || !beat.url) {
-      return res.status(404).json({ error: 'Beat ou URL introuvable' });
-    }
+    if (!beat || !beat.url) return res.status(404).json({ error: 'Beat ou URL introuvable' });
 
     // 1️⃣ Télécharger le .sty
     const inputStyPath = path.join(UPLOAD_DIR, beat.filename);
@@ -530,7 +521,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     const sectionsArray = Array.isArray(pyJson.sections) ? pyJson.sections : [];
     const uploadResults = [];
 
-    // On lira le tempo/signature sur la 1ère MAIN existante pour fournir des métadonnées globales
+    // Métadonnées globales
     let globalBpm = beat.tempo || 120;
     let globalTsNum = 4, globalTsDen = 4;
 
@@ -539,7 +530,6 @@ router.post('/prepare-all-sections', async (req, res) => {
       const midPath = path.join(TEMP_DIR, section.midFilename);
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
-      // Métadonnées par section
       const meta = readMidiMeta(midPath);
       if (!globalBpm) globalBpm = meta.bpm;
       if (globalTsNum === 4 && globalTsDen === 4) { globalTsNum = meta.ts_num; globalTsDen = meta.ts_den; }
@@ -547,15 +537,12 @@ router.post('/prepare-all-sections', async (req, res) => {
       await convertMidToWavAsync(midPath, wavPath);
       if (!fs.existsSync(wavPath)) continue;
 
-      // Durée MIDI brute
       const midiDur = getMidiDurationSec(midPath);
-      // 🔁 Durée quantifiée sur mesures (Yamaha-friendly)
       const targetSec = quantizeDurationToBars(midiDur || getWavDurationSec(wavPath), meta.bpm, meta.ts_num);
       if (targetSec && targetSec > 0) hardTrimToDuration(wavPath, targetSec);
 
       const durationSec = getWavDurationSec(wavPath);
 
-      // Upload MIDI
       const midBuffer = fs.readFileSync(midPath);
       const { error: midErr } = await supabase
         .storage
@@ -563,7 +550,6 @@ router.post('/prepare-all-sections', async (req, res) => {
         .upload(`${beatId}/${section.midFilename}`, midBuffer, { cacheControl: '3600', upsert: true });
       if (midErr) console.error(`Erreur upload MID ${section.midFilename}:`, midErr);
 
-      // Upload WAV
       const wavBuffer = fs.readFileSync(wavPath);
       const { error: wavErr } = await supabase
         .storage
@@ -592,7 +578,6 @@ router.post('/prepare-all-sections', async (req, res) => {
       'Main D': 'Fill In DD'
     };
 
-    // Métadonnées globales pour scheduler côté front
     const barDurSec = (60 / (globalBpm || 120)) * (globalTsNum || 4);
 
     const manifest = {
@@ -613,7 +598,7 @@ router.post('/prepare-all-sections', async (req, res) => {
   }
 });
 
-// --- endpoint manifest simple en GET ---
+// endpoint manifest simple
 router.get('/sequencer-manifest', async (req, res) => {
   const beatId = parseInt(req.query.beatId, 10);
   if (!beatId) return res.status(400).json({ error: 'beatId requis' });
@@ -663,12 +648,7 @@ router.get('/sequencer-manifest', async (req, res) => {
       'Main D': 'Fill In DD'
     };
 
-    return res.json({
-      beatId,
-      tempoFactorDefault: 1.0,
-      sections,
-      fillMap
-    });
+    return res.json({ beatId, tempoFactorDefault: 1.0, sections, fillMap });
   } catch (err) {
     console.error('❌ Erreur /sequencer-manifest :', err);
     return res.status(500).json({ error: 'Erreur lors de la construction du manifest' });
