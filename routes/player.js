@@ -9,6 +9,7 @@ const prisma = new PrismaClient();
 const { createClient } = require('@supabase/supabase-js');
 
 console.log("🚀 routes/player.js chargé");
+
 // ===== DEBUG HELPERS =====
 const DEBUG_SYNTH = (process.env.DEBUG_SYNTH || '1') !== '0';
 
@@ -45,11 +46,18 @@ const FFPROBE_EXE = 'ffprobe';
 // Utilise la variable d'environnement FFMPEG_PATH ou 'ffmpeg' par défaut
 const FFMPEG_EXE = process.env.FFMPEG_PATH || 'ffmpeg';
 
-// ⬇️ AJOUT: Fluidsynth prioritaire (si présent)
+// ⬇️ Fluidsynth prioritaire (si présent)
 const FLUIDSYNTH_EXE = process.env.FLUIDSYNTH_PATH || 'fluidsynth';
 
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
-const TIMIDITY_CFG_PATH = path.join(__dirname, '..', 'timidity.cfg');
+const TIMIDITY_CFG_PATH = path.join(__dirname, '..', 'timidity.cfg'); // (non utilisé directement ici, on génère un cfg minimal)
+
+// Paramètres anti-OOM / pilotage
+const DISABLE_FLUIDSYNTH = process.env.DISABLE_FLUIDSYNTH === '1';
+const SF2_MAX_BYTES_FOR_FLUID = Number(process.env.SF2_MAX_BYTES_FOR_FLUID || 300 * 1024 * 1024); // 300MB par défaut
+function sf2SizeBytes() {
+  try { return fs.statSync(SF2_PATH).size; } catch { return 0; }
+}
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -63,7 +71,7 @@ function publicBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
-// ⬇️ AJOUT: détection binaire
+// (Laisse cette version : éventuellement utile ailleurs)
 function binExists(cmd) {
   try {
     const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf-8' });
@@ -156,7 +164,7 @@ function quantizeDurationToBars(rawSeconds, bpm, ts_num) {
 }
 
 // --- Conversion + trims ---
-// ⬇️ MODIFIÉ: priorité Fluidsynth, fallback TiMidity (cfg minimal avec ton .sf2)
+// ⬇️ MODIFIÉ: priorité Fluidsynth (si possible), fallback TiMidity (cfg minimal avec ton .sf2)
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion MIDI → WAV (préférence Fluidsynth)');
   console.log('📄 MID :', fileInfo(midPath));
@@ -166,24 +174,35 @@ function convertMidToWav(midPath, wavPath) {
     throw new Error(`SoundFont introuvable: ${SF2_PATH}`);
   }
 
+  const size = sf2SizeBytes();
+  const canUseFluid = exists(FLUIDSYNTH_EXE) && !DISABLE_FLUIDSYNTH && size <= SF2_MAX_BYTES_FOR_FLUID;
+  if (!canUseFluid) {
+    if (!exists(FLUIDSYNTH_EXE)) console.warn(`ℹ️ fluidsynth non trouvé (${FLUIDSYNTH_EXE})`);
+    if (DISABLE_FLUIDSYNTH) console.warn('ℹ️ DISABLE_FLUIDSYNTH=1 → on saute fluidsynth');
+    if (size > SF2_MAX_BYTES_FOR_FLUID) console.warn(`ℹ️ SF2 ${size} > seuil ${SF2_MAX_BYTES_FOR_FLUID} → on saute fluidsynth (anti-OOM)`);
+  }
+
   const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
   let used = 'none';
   // ===== Try FLUIDSYNTH =====
-  if (exists(FLUIDSYNTH_EXE)) {
+  if (canUseFluid) {
     const fsVer = spawnSync(FLUIDSYNTH_EXE, ['--version'], { encoding: 'utf-8' });
     if (DEBUG_SYNTH) {
       console.log('ℹ️ fluidsynth --version => status:', fsVer.status, 'head:', (fsVer.stdout || fsVer.stderr || '').split('\n')[0]);
     }
 
     const fsArgs = [
+      '-ni',                        // non-interactif
       '-a', 'file',
       '-F', tempWav,
       '-T', 'wav',
       '-r', '44100',
       '-g', '1.0',
+      '-o', 'synth.dynamic-sample-loading=1', // charge à la demande (réduit la RAM)
       '-o', 'synth.chorus.active=0',
       '-o', 'synth.reverb.active=0',
+      // '-o','synth.polyphony=64', // (optionnel) réduire la polyphonie si besoin
       SF2_PATH,
       midPath
     ];
@@ -201,8 +220,6 @@ function convertMidToWav(midPath, wavPath) {
     } else {
       console.warn('⚠️ Fluidsynth a échoué ou n’a pas produit tempWav, fallback TiMidity.');
     }
-  } else {
-    console.warn(`ℹ️ fluidsynth non trouvé (${FLUIDSYNTH_EXE}), fallback TiMidity.`);
   }
 
   // ===== Fallback TIMIDITY =====
@@ -221,7 +238,7 @@ function convertMidToWav(midPath, wavPath) {
     }
 
     const tArgs = [
-      '-c', tmpCfg,          // utilise SEULEMENT notre cfg
+      '-c', tmpCfg,          // utilise SEULEMENT notre cfg (pas de soundfont interne)
       '-Ow',                 // sortie WAV
       '-s', '44100',         // samplerate
       '-o', tempWav,         // fichier de sortie
@@ -274,13 +291,21 @@ function convertMidToWav(midPath, wavPath) {
 }
 
 
-// ⬇️ MODIFIÉ: version async avec la même logique
+// ⬇️ MODIFIÉ: version async avec logique anti-OOM identique
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
     console.log('🎶 Conversion MIDI → WAV (async, préférence Fluidsynth)');
     console.log('📄 MID :', fileInfo(midPath));
     console.log('🎹 SF2 :', fileInfo(SF2_PATH));
     if (!fs.existsSync(SF2_PATH)) return reject(new Error(`SoundFont introuvable: ${SF2_PATH}`));
+
+    const size = sf2SizeBytes();
+    const canUseFluid = exists(FLUIDSYNTH_EXE) && !DISABLE_FLUIDSYNTH && size <= SF2_MAX_BYTES_FOR_FLUID;
+    if (!canUseFluid) {
+      if (!exists(FLUIDSYNTH_EXE)) console.warn(`ℹ️ fluidsynth non trouvé (${FLUIDSYNTH_EXE})`);
+      if (DISABLE_FLUIDSYNTH) console.warn('ℹ️ DISABLE_FLUIDSYNTH=1 → skip fluidsynth');
+      if (size > SF2_MAX_BYTES_FOR_FLUID) console.warn(`ℹ️ SF2 ${size} > seuil ${SF2_MAX_BYTES_FOR_FLUID} → skip fluidsynth (anti-OOM)`);
+    }
 
     const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
@@ -296,14 +321,14 @@ function convertMidToWavAsync(midPath, wavPath) {
 
       const f = spawn(FFMPEG_EXE, fArgs);
       let fErr = '', fOut = '';
-      if (f.stdout) f.stdout.on('data', d => { fOut += d.toString(); });
-      if (f.stderr) f.stderr.on('data', d => { fErr += d.toString(); });
+      f.stdout?.on('data', d => { fOut += d.toString(); });
+      f.stderr?.on('data', d => { fErr += d.toString(); });
       f.on('error', err => reject(err));
-      f.on('close', code2 => {
+      f.on('close', (code2, signal2) => {
         if (DEBUG_SYNTH) {
           console.log('📤 ffmpeg stdout (tail):', fOut.split('\n').slice(-10).join('\n'));
           console.log('📥 ffmpeg stderr (tail):', fErr.split('\n').slice(-10).join('\n'));
-          console.log('🔚 ffmpeg exit code:', code2);
+          console.log('🔚 ffmpeg exit:', { code: code2, signal: signal2 });
         }
         try { fs.unlinkSync(tempWav); } catch {}
         if (code2 !== 0) return reject(new Error(`ffmpeg exit ${code2}: ${fErr}`));
@@ -327,39 +352,36 @@ function convertMidToWavAsync(midPath, wavPath) {
 
       const t = spawn(TIMIDITY_EXE, tArgs, { env: { ...process.env, TIMIDITY_CFG: tmpCfg } });
       let tErr = '', tOut = '';
-      if (t.stdout) t.stdout.on('data', d => { tOut += d.toString(); });
-      if (t.stderr) t.stderr.on('data', d => { tErr += d.toString(); });
+      t.stdout?.on('data', d => { tOut += d.toString(); });
+      t.stderr?.on('data', d => { tErr += d.toString(); });
       t.on('error', err => reject(err));
-      t.on('close', code => {
+      t.on('close', (code, signal) => {
         if (DEBUG_SYNTH) {
           console.log('📤 timidity stdout (tail):', tOut.split('\n').slice(-10).join('\n'));
           console.log('📥 timidity stderr (tail):', tErr.split('\n').slice(-10).join('\n'));
-          console.log('🔚 timidity exit code:', code);
+          console.log('🔚 timidity exit:', { code, signal });
         }
         try { fs.unlinkSync(tmpCfg); } catch {}
         if (code !== 0 || !fs.existsSync(tempWav)) {
           try { fs.unlinkSync(tempWav); } catch {}
-          return reject(new Error(`Timidity exit ${code}: ${tErr}`));
+          return reject(new Error(`Timidity exit ${code} signal ${signal || 'none'}: ${tErr}`));
         }
         trimWithFfmpeg();
       });
     };
 
-    if (exists(FLUIDSYNTH_EXE)) {
-      // Optionnel : log de version
-      const fsVer = spawnSync(FLUIDSYNTH_EXE, ['--version'], { encoding: 'utf-8' });
-      if (DEBUG_SYNTH) {
-        console.log('ℹ️ fluidsynth --version => status:', fsVer.status, 'head:', (fsVer.stdout || fsVer.stderr || '').split('\n')[0]);
-      }
-
+    const runFluidsynth = () => {
       const fsArgs = [
+        '-ni',
         '-a','file',
         '-F', tempWav,
         '-T','wav',
         '-r','44100',
         '-g','1.0',
+        '-o','synth.dynamic-sample-loading=1',
         '-o','synth.chorus.active=0',
         '-o','synth.reverb.active=0',
+        // '-o','synth.polyphony=64', // (optionnel)
         SF2_PATH,
         midPath
       ];
@@ -367,24 +389,30 @@ function convertMidToWavAsync(midPath, wavPath) {
 
       const p = spawn(FLUIDSYNTH_EXE, fsArgs);
       let pErr = '', pOut = '';
-      if (p.stdout) p.stdout.on('data', d => { pOut += d.toString(); });
-      if (p.stderr) p.stderr.on('data', d => { pErr += d.toString(); });
+      p.stdout?.on('data', d => { pOut += d.toString(); });
+      p.stderr?.on('data', d => { pErr += d.toString(); });
       p.on('error', err => reject(err));
-      p.on('close', code => {
+      p.on('close', (code, signal) => {
         if (DEBUG_SYNTH) {
           console.log('📤 fluidsynth stdout (tail):', pOut.split('\n').slice(-10).join('\n'));
           console.log('📥 fluidsynth stderr (tail):', pErr.split('\n').slice(-10).join('\n'));
-          console.log('🔚 fluidsynth exit code:', code);
+          console.log('🔚 fluidsynth exit:', { code, signal });
         }
-        if (code !== 0 || !fs.existsSync(tempWav)) {
-          console.warn('⚠️ Fluidsynth KO ou pas de fichier tempWav — fallback TiMidity.');
-          runTimidity();
-        } else {
-          trimWithFfmpeg();
+        if (signal || code !== 0 || !fs.existsSync(tempWav)) {
+          console.warn('⚠️ Fluidsynth KO (ou pas de fichier de sortie), fallback TiMidity.');
+          return runTimidity();
         }
+        trimWithFfmpeg();
       });
+    };
+
+    if (canUseFluid) {
+      const fsVer = spawnSync(FLUIDSYNTH_EXE, ['--version'], { encoding: 'utf-8' });
+      if (DEBUG_SYNTH) {
+        console.log('ℹ️ fluidsynth --version =>', (fsVer.stdout || fsVer.stderr || '').split('\n')[0]);
+      }
+      runFluidsynth();
     } else {
-      console.warn(`ℹ️ fluidsynth non trouvé (${FLUIDSYNTH_EXE}), fallback TiMidity.`);
       runTimidity();
     }
   });
