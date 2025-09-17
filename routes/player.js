@@ -20,6 +20,9 @@ const FFPROBE_EXE = 'ffprobe';
 // Utilise la variable d'environnement FFMPEG_PATH ou 'ffmpeg' par défaut
 const FFMPEG_EXE = process.env.FFMPEG_PATH || 'ffmpeg';
 
+// >>>>>>> AJOUT: Fluidsynth prioritaire
+const FLUIDSYNTH_EXE = process.env.FLUIDSYNTH_PATH || 'fluidsynth';
+
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
 const TIMIDITY_CFG_PATH = path.join(__dirname, '..', 'timidity.cfg');
 
@@ -33,6 +36,14 @@ function publicBaseUrl(req) {
   const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   return `${proto}://${host}`;
+}
+
+// >>>>>>> AJOUT: détection binaire
+function binExists(cmd) {
+  try {
+    const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf-8' });
+    return r.status === 0;
+  } catch { return false; }
 }
 
 async function downloadStyFromUrl(url, destPath) {
@@ -121,39 +132,68 @@ function quantizeDurationToBars(rawSeconds, bpm, ts_num) {
 }
 
 // --- Conversion + trims ---
+// >>>>>>> MODIFIÉ: priorité Fluidsynth, fallback TiMidity (cfg minimal)
 function convertMidToWav(midPath, wavPath) {
-  console.log('🎶 Conversion MIDI → WAV (sync) + hard trim');
+  console.log('🎶 Conversion MIDI → WAV (préférence fluidsynth)');
+
+  if (!fs.existsSync(SF2_PATH)) {
+    throw new Error(`SoundFont introuvable: ${SF2_PATH}`);
+  }
 
   const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
-  // 1) timidity SANS --preserve-silence et SANS reverb/chorus
-  const tArgs = [
-    '-c', TIMIDITY_CFG_PATH, '-Ow',
-    '-A120',
-    '-EFreverb=0','-EFchorus=0',
-    '-o', tempWav, midPath
-  ];
-  const t = spawnSync(TIMIDITY_EXE, tArgs, { encoding: 'utf-8' });
-  if (t.error || t.status !== 0) {
-    console.error('❌ timidity stderr:', t.stderr);
-    try { fs.unlinkSync(tempWav); } catch {}
-    throw new Error(`Timidity a échoué (${t.status ?? 'n/a'})`);
+  if (binExists(FLUIDSYNTH_EXE)) {
+    // FLUIDSYNTH → WAV (offline)
+    const fArgs = [
+      '-ni', SF2_PATH, midPath,
+      '-F', tempWav, '-r', '44100',
+      '-o', 'synth.chorus.active=false',
+      '-o', 'synth.reverb.active=false',
+      '-g', '1.0'
+    ];
+    const p = spawnSync(FLUIDSYNTH_EXE, fArgs, { encoding: 'utf-8' });
+    if (p.status !== 0) {
+      console.error('❌ fluidsynth stderr:', p.stderr);
+      try { fs.unlinkSync(tempWav); } catch {}
+      throw new Error(`fluidsynth a échoué (${p.status ?? 'n/a'})`);
+    }
+  } else {
+    // TiMidity++ avec cfg minimal (pas de fallback caché)
+    const tmpCfg = path.join(TEMP_DIR, `timidity_min_${Date.now()}.cfg`);
+    fs.writeFileSync(tmpCfg, [
+      `soundfont ${SF2_PATH}`,
+      `dir .`
+    ].join('\n'));
+
+    const tArgs = [
+      '-c', tmpCfg, '-Ow',
+      '-A120',
+      '-EFreverb=0','-EFchorus=0',
+      '-o', tempWav, midPath
+    ];
+    const t = spawnSync(TIMIDITY_EXE, tArgs, { encoding: 'utf-8' });
+    try { fs.unlinkSync(tmpCfg); } catch {}
+    if (t.error || t.status !== 0) {
+      console.error('❌ timidity stderr:', t.stderr);
+      try { fs.unlinkSync(tempWav); } catch {}
+      throw new Error(`Timidity a échoué (${t.status ?? 'n/a'})`);
+    }
   }
 
-  // 2) ffmpeg : trim FIN puis DÉBUT (fin un peu tolérante)
+  // ffmpeg : trim FIN puis DÉBUT (inchangé)
   const filter =
     'areverse,' +
     'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
     'areverse,' +
     'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
 
-  const fArgs = [
+  const fArgs2 = [
     '-y','-i', tempWav,
     '-af', filter,
     '-acodec','pcm_s16le','-ar','44100',
     wavPath
   ];
-  const f = spawnSync(FFMPEG_EXE, fArgs, { encoding: 'utf-8' });
+  const f = spawnSync(FFMPEG_EXE, fArgs2, { encoding: 'utf-8' });
   if (f.error || f.status !== 0) {
     console.error('❌ ffmpeg stderr:', f.stderr);
     try { fs.unlinkSync(tempWav); } catch {}
@@ -164,53 +204,81 @@ function convertMidToWav(midPath, wavPath) {
   console.log('✅ Conversion + hard trim OK →', wavPath);
 }
 
+// >>>>>>> MODIFIÉ: version async avec même logique
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
-    console.log('🎶 Conversion MIDI → WAV (async) + hard trim');
+    console.log('🎶 Conversion MIDI → WAV (async, préférence fluidsynth)');
+
+    if (!fs.existsSync(SF2_PATH)) {
+      return reject(new Error(`SoundFont introuvable: ${SF2_PATH}`));
+    }
 
     const tempWav = wavPath.replace(/\.wav$/i, '_temp.wav');
 
-    // 1) timidity identique à la version sync
-    const tArgs = [
-      '-c', TIMIDITY_CFG_PATH, '-Ow',
-      '-A120',
-      '-EFreverb=0','-EFchorus=0',
-      '-o', tempWav, midPath
-    ];
-    const t = spawn(TIMIDITY_EXE, tArgs);
-    let tErr = '';
-    t.stderr.on('data', d => { tErr += d.toString(); });
-    t.on('error', reject);
-    t.on('close', code => {
-      if (code !== 0) {
-        try { fs.unlinkSync(tempWav); } catch {}
-        return reject(new Error(`Timidity exit ${code}: ${tErr}`));
-      }
-
-      // 2) ffmpeg : trim FIN puis DÉBUT
+    const trimWithFfmpeg = () => {
       const filter =
         'areverse,' +
         'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
         'areverse,' +
         'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
 
-      const fArgs = [
-        '-y','-i', tempWav,
-        '-af', filter,
-        '-acodec','pcm_s16le','-ar','44100',
-        wavPath
-      ];
+      const fArgs = ['-y','-i', tempWav, '-af', filter, '-acodec','pcm_s16le','-ar','44100', wavPath];
       const f = spawn(FFMPEG_EXE, fArgs);
       let fErr = '';
       f.stderr.on('data', d => { fErr += d.toString(); });
-      f.on('error', reject);
+      f.on('error', err => reject(err));
       f.on('close', code2 => {
         try { fs.unlinkSync(tempWav); } catch {}
         if (code2 !== 0) return reject(new Error(`ffmpeg exit ${code2}: ${fErr}`));
         console.log('✅ Conversion + hard trim OK →', wavPath);
         resolve();
       });
-    });
+    };
+
+    const runTimidity = () => {
+      const tmpCfg = path.join(TEMP_DIR, `timidity_min_${Date.now()}.cfg`);
+      fs.writeFileSync(tmpCfg, [
+        `soundfont ${SF2_PATH}`,
+        `dir .`
+      ].join('\n'));
+
+      const tArgs = ['-c', tmpCfg, '-Ow', '-A120', '-EFreverb=0','-EFchorus=0', '-o', tempWav, midPath];
+      const t = spawn(TIMIDITY_EXE, tArgs);
+      let tErr = '';
+      t.stderr.on('data', d => { tErr += d.toString(); });
+      t.on('error', err => reject(err));
+      t.on('close', code => {
+        try { fs.unlinkSync(tmpCfg); } catch {}
+        if (code !== 0) {
+          try { fs.unlinkSync(tempWav); } catch {}
+          return reject(new Error(`Timidity exit ${code}: ${tErr}`));
+        }
+        trimWithFfmpeg();
+      });
+    };
+
+    if (binExists(FLUIDSYNTH_EXE)) {
+      const fArgs = [
+        '-ni', SF2_PATH, midPath,
+        '-F', tempWav, '-r', '44100',
+        '-o', 'synth.chorus.active=false',
+        '-o', 'synth.reverb.active=false',
+        '-g', '1.0'
+      ];
+      const p = spawn(FLUIDSYNTH_EXE, fArgs);
+      let pErr = '';
+      p.stderr.on('data', d => { pErr += d.toString(); });
+      p.on('error', err => reject(err));
+      p.on('close', code => {
+        if (code !== 0) {
+          try { fs.unlinkSync(tempWav); } catch {}
+          return reject(new Error(`fluidsynth exit ${code}: ${pErr}`));
+        }
+        trimWithFfmpeg();
+      });
+    } else {
+      runTimidity();
+    }
   });
 }
 
