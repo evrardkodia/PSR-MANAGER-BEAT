@@ -114,6 +114,112 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
 }
 
 /* ──────────────────────────────────────────────────────────────
+   🔧 Normalisation MIDI au tick 0 (Bank Select + Program + tempo/TS)
+   ────────────────────────────────────────────────────────────── */
+function normalizeSectionInplace(sectionMidPath) {
+  const pyCode = `
+import sys
+from mido import MidiFile, MidiTrack, Message, MetaMessage
+
+sec_path = sys.argv[1]
+mf = MidiFile(sec_path)
+tpb = mf.ticks_per_beat
+
+first_cc0, first_cc32, first_pc = {}, {}, {}
+channels_seen = set()
+first_tempo = None
+first_ts = None
+
+for tr in mf.tracks:
+    for msg in tr:
+        if msg.is_meta:
+            if first_tempo is None and msg.type == 'set_tempo':
+                first_tempo = msg
+            if first_ts is None and msg.type == 'time_signature':
+                first_ts = msg
+            continue
+        if hasattr(msg, 'channel'):
+            ch = msg.channel
+            if msg.type == 'control_change':
+                if msg.control == 0 and ch not in first_cc0:
+                    first_cc0[ch] = msg.value
+                elif msg.control == 32 and ch not in first_cc32:
+                    first_cc32[ch] = msg.value
+            elif msg.type == 'program_change' and ch not in first_pc:
+                first_pc[ch] = msg.program
+                channels_seen.add(ch)
+            elif msg.type == 'note_on' and msg.velocity > 0:
+                channels_seen.add(ch)
+
+if not channels_seen and not first_tempo and not first_ts:
+    print("normalized: none"); sys.exit(0)
+
+setup = MidiTrack()
+if first_tempo:
+    setup.append(MetaMessage('set_tempo', tempo=first_tempo.tempo, time=0))
+if first_ts:
+    setup.append(MetaMessage('time_signature',
+                             numerator=first_ts.numerator,
+                             denominator=first_ts.denominator,
+                             clocks_per_click=getattr(first_ts, 'clocks_per_click', 24),
+                             notated_32nd_notes_per_beat=getattr(first_ts, 'notated_32nd_notes_per_beat', 8),
+                             time=0))
+
+for ch in sorted(channels_seen):
+    if ch in first_cc0:
+        setup.append(Message('control_change', channel=ch, control=0, value=first_cc0[ch], time=0))
+    if ch in first_cc32:
+        setup.append(Message('control_change', channel=ch, control=32, value=first_cc32[ch], time=0))
+    if ch in first_pc:
+        setup.append(Message('program_change', channel=ch, program=first_pc[ch], time=0))
+
+new_mf = MidiFile(ticks_per_beat=tpb)
+new_mf.tracks.append(setup)
+for tr in mf.tracks:
+    nt = MidiTrack()
+    for msg in tr:
+        nt.append(msg.copy())
+    new_mf.tracks.append(nt)
+
+new_mf.save(sec_path)
+print("normalized:", sec_path)
+`;
+  const out = spawnSync('python3', ['-c', pyCode, sectionMidPath], { encoding: 'utf-8' });
+  if (DEBUG_SYNTH) {
+    console.log('🧰 normalizeSection stdout:', (out.stdout || '').trim());
+    if (out.stderr?.trim()) console.warn('🧰 normalizeSection stderr:', out.stderr.trim());
+  }
+}
+
+// (facultatif) mini dump pour debugger le head d’un MIDI
+function dumpMidiHead(midPath, maxEventsPerTrack = 40) {
+  const py = `
+import sys, json
+from mido import MidiFile
+mf = MidiFile(sys.argv[1])
+out = []
+for ti, tr in enumerate(mf.tracks):
+    cur = []
+    t=0
+    for i, m in enumerate(tr):
+        t += m.time
+        if i> ${maxEventsPerTrack}: break
+        row = {'t':t, 'type': m.type}
+        if not m.is_meta and hasattr(m,'channel'): row['ch']=m.channel
+        if m.type=='control_change': row.update({'cc': m.control, 'val': m.value})
+        if m.type=='program_change': row.update({'prog': m.program})
+        if m.type=='note_on': row.update({'note': m.note, 'vel': m.velocity})
+        if m.type=='time_signature': row.update({'num': m.numerator, 'den': m.denominator})
+        if m.type=='set_tempo': row.update({'tempo': m.tempo})
+        cur.append(row)
+    out.append(cur)
+print(json.dumps(out))
+`;
+  const out = spawnSync('python3', ['-c', py, midPath], { encoding: 'utf-8' });
+  try { console.log('📝 MIDI HEAD =', JSON.parse(out.stdout)); } catch {}
+}
+
+/* ──────────────────────────────────────────────────────────────
    Lecture du tempo et de la signature depuis le MIDI (Python)
    ────────────────────────────────────────────────────────────── */
 function readMidiMeta(midPath) {
@@ -486,6 +592,12 @@ router.post('/prepare-main', async (req, res) => {
     const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
     const sectionName = `Main ${mainLetter}`;
     const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionName);
+
+    // 💡 Injecte au tick 0 l’état des banques/kits + tempo/TS
+    normalizeSectionInplace(rawMidPath);
+    // DEBUG optionnel :
+    // if (DEBUG_SYNTH) dumpMidiHead(rawMidPath, 30);
+
     let duration = parseFloat(stdout.trim()); // durée MIDI de la section (si renvoyée)
     if (!Number.isFinite(duration) || duration <= 0) {
       duration = getMidiDurationSec(rawMidPath);
@@ -673,6 +785,12 @@ router.post('/prepare-all-sections', async (req, res) => {
     // 4️⃣ Conversion + Upload Supabase
     for (const section of sectionsArray) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
+
+      // 💡 Normalise l’état des banques/kits au tick 0
+      normalizeSectionInplace(midPath);
+      // DEBUG optionnel :
+      // if (DEBUG_SYNTH) dumpMidiHead(midPath, 30);
+
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
       // Métadonnées par section
