@@ -114,105 +114,6 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   🔁 NORMALISATION DE SECTION (banques/programmes au t=0)
-   - Détecte, par canal, la première occurrence de CC0/CC32/Program
-   - Les préprend au tick 0 (ordre CC0→CC32→Program)
-   - Copie tempo & signature au t=0 si rencontrés
-   - Agit IN-PLACE sur sectionMidPath
-   ────────────────────────────────────────────────────────────── */
-function normalizeSectionInplace(sectionMidPath) {
-  const pyCode = `
-import sys, io
-from mido import MidiFile, MidiTrack, Message, MetaMessage
-
-if len(sys.argv) < 2:
-    sys.exit(0)
-
-sec_path = sys.argv[1]
-mf = MidiFile(sec_path)
-tpb = mf.ticks_per_beat
-
-# Collecte: par canal -> first CC0, CC32, PC
-first_cc0  = {}
-first_cc32 = {}
-first_pc   = {}
-channels_seen = set()
-
-first_tempo = None
-first_ts = None
-
-for tr in mf.tracks:
-    abs_time = 0
-    seen_note_on = False
-    for msg in tr:
-        abs_time += msg.time
-        if msg.is_meta:
-            if first_tempo is None and msg.type == 'set_tempo':
-                first_tempo = msg
-            if first_ts is None and msg.type == 'time_signature':
-                first_ts = msg
-            continue
-        if hasattr(msg, 'channel'):
-            ch = msg.channel
-            if msg.type == 'note_on' and msg.velocity > 0:
-                seen_note_on = True
-                channels_seen.add(ch)
-            elif msg.type == 'control_change':
-                if msg.control == 0 and ch not in first_cc0:
-                    first_cc0[ch] = msg.value
-                elif msg.control == 32 and ch not in first_cc32:
-                    first_cc32[ch] = msg.value
-            elif msg.type == 'program_change' and ch not in first_pc:
-                first_pc[ch] = msg.program
-                channels_seen.add(ch)
-
-# Si aucun contrôleur détecté, rien à faire
-if not channels_seen and not first_tempo and not first_ts:
-    sys.exit(0)
-
-setup = MidiTrack()
-# Meta au t=0
-if first_tempo:
-    setup.append(MetaMessage('set_tempo', tempo=first_tempo.tempo, time=0))
-if first_ts:
-    setup.append(MetaMessage('time_signature', numerator=first_ts.numerator, denominator=first_ts.denominator,
-                             clocks_per_click=getattr(first_ts,'clocks_per_click',24),
-                             notated_32nd_notes_per_beat=getattr(first_ts,'notated_32nd_notes_per_beat',8),
-                             time=0))
-
-# Messages canal au t=0 (ordre CC0 -> CC32 -> Program)
-for ch in sorted(channels_seen):
-    if ch in first_cc0:
-        setup.append(Message('control_change', channel=ch, control=0, value=first_cc0[ch], time=0))
-    if ch in first_cc32:
-        setup.append(Message('control_change', channel=ch, control=32, value=first_cc32[ch], time=0))
-    if ch in first_pc:
-        setup.append(Message('program_change', channel=ch, program=first_pc[ch], time=0))
-
-new_mf = MidiFile(ticks_per_beat=tpb)
-# Insère le track setup en premier
-new_mf.tracks.append(setup)
-# Reprend les tracks existants inchangés
-for tr in mf.tracks:
-    new_tr = MidiTrack()
-    for msg in tr:
-        new_tr.append(msg.copy())
-    new_mf.tracks.append(new_tr)
-
-new_mf.save(sec_path)
-print("normalized:", sec_path)
-`;
-  const out = spawnSync('python3', ['-c', pyCode, sectionMidPath], { encoding: 'utf-8' });
-  if (DEBUG_SYNTH) {
-    console.log('🧰 normalizeSection stdout:', (out.stdout || '').trim());
-    if (out.stderr?.trim()) console.warn('🧰 normalizeSection stderr:', out.stderr.trim());
-  }
-  if (out.status !== 0) {
-    console.warn('⚠️ normalizeSectionInplace: code', out.status, '→ section conservée telle quelle.');
-  }
-}
-
-/* ──────────────────────────────────────────────────────────────
    Lecture du tempo et de la signature depuis le MIDI (Python)
    ────────────────────────────────────────────────────────────── */
 function readMidiMeta(midPath) {
@@ -263,7 +164,7 @@ function quantizeDurationToBars(rawSeconds, bpm, ts_num) {
 }
 
 // --- Conversion + trims ---
-// ⬇️ priorité Fluidsynth (si possible), fallback TiMidity
+// ⬇️ MODIFIÉ: priorité Fluidsynth (si possible), fallback TiMidity (cfg minimal avec ton .sf2)
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion MIDI → WAV (préférence Fluidsynth)');
   console.log('📄 MID :', fileInfo(midPath));
@@ -292,13 +193,13 @@ function convertMidToWav(midPath, wavPath) {
     }
 
     const fsArgs = [
-      '-ni',
+      '-ni',                        // non-interactif
       '-a', 'file',
       '-F', tempWav,
       '-T', 'wav',
       '-r', '44100',
       '-g', '1.0',
-      '-o', 'synth.dynamic-sample-loading=1',
+      '-o', 'synth.dynamic-sample-loading=1', // charge à la demande (réduit la RAM)
       '-o', 'synth.chorus.active=0',
       '-o', 'synth.reverb.active=0',
       // '-o','synth.polyphony=64', // (optionnel) réduire la polyphonie si besoin
@@ -337,10 +238,10 @@ function convertMidToWav(midPath, wavPath) {
     }
 
     const tArgs = [
-      '-c', tmpCfg,
-      '-Ow',
-      '-s', '44100',
-      '-o', tempWav,
+      '-c', tmpCfg,          // utilise SEULEMENT notre cfg (pas de soundfont interne)
+      '-Ow',                 // sortie WAV
+      '-s', '44100',         // samplerate
+      '-o', tempWav,         // fichier de sortie
       '-EFreverb=0', '-EFchorus=0',
       midPath
     ];
@@ -365,7 +266,7 @@ function convertMidToWav(midPath, wavPath) {
     used = 'timidity';
   }
 
-  // ===== TRIM avec ffmpeg =====
+  // ===== TRIM avec ffmpeg (inchangé, mais loggé) =====
   const filter =
     'areverse,' +
     'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
@@ -387,22 +288,10 @@ function convertMidToWav(midPath, wavPath) {
 
   try { fs.unlinkSync(tempWav); } catch {}
   console.log(`✅ Conversion + hard trim OK (${used}) →`, fileInfo(wavPath));
-
-  // --- MP3 optionnel ---
-  if ((process.env.ENABLE_MP3 || '0') === '1') {
-    const mp3Path = wavPath.replace(/\.wav$/i, '.mp3');
-    const mp3Args = ['-y','-i', wavPath, '-codec:a', 'libmp3lame', '-q:a', '2', mp3Path];
-    const enc = spawnSync(FFMPEG_EXE, mp3Args, { encoding: 'utf-8' });
-    if (enc.status === 0) {
-      console.log('✅ MP3 encodé :', fileInfo(mp3Path));
-    } else {
-      console.warn('⚠️ MP3 encode fail:', (enc.stderr || '').split('\n').slice(-8).join('\n'));
-    }
-  }
 }
 
 
-// ⬇️ version async identique
+// ⬇️ MODIFIÉ: version async avec logique anti-OOM identique
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
     console.log('🎶 Conversion MIDI → WAV (async, préférence Fluidsynth)');
@@ -444,19 +333,6 @@ function convertMidToWavAsync(midPath, wavPath) {
         try { fs.unlinkSync(tempWav); } catch {}
         if (code2 !== 0) return reject(new Error(`ffmpeg exit ${code2}: ${fErr}`));
         console.log('✅ Conversion + hard trim OK →', fileInfo(wavPath));
-
-        // MP3 optionnel
-        if ((process.env.ENABLE_MP3 || '0') === '1') {
-          const mp3Path = wavPath.replace(/\.wav$/i, '.mp3');
-          const mp3Args = ['-y','-i', wavPath, '-codec:a', 'libmp3lame', '-q:a', '2', mp3Path];
-          const enc = spawnSync(FFMPEG_EXE, mp3Args, { encoding:'utf-8' });
-          if (enc.status === 0) {
-            console.log('✅ MP3 encodé :', fileInfo(mp3Path));
-          } else {
-            console.warn('⚠️ MP3 encode fail:', (enc.stderr || '').split('\n').slice(-8).join('\n'));
-          }
-        }
-
         resolve();
       });
     };
@@ -610,11 +486,7 @@ router.post('/prepare-main', async (req, res) => {
     const rawMidPath = path.join(TEMP_DIR, `${beatId}_main_${mainLetter}_raw.mid`);
     const sectionName = `Main ${mainLetter}`;
     const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionName);
-
-    // 🔧 NORMALISATION: injecte CC0/CC32/Program/tempo/signature au t=0 de la section
-    normalizeSectionInplace(rawMidPath);
-
-    let duration = parseFloat((stdout || '').trim()); // durée MIDI de la section (si renvoyée)
+    let duration = parseFloat(stdout.trim()); // durée MIDI de la section (si renvoyée)
     if (!Number.isFinite(duration) || duration <= 0) {
       duration = getMidiDurationSec(rawMidPath);
     }
@@ -635,13 +507,9 @@ router.post('/prepare-main', async (req, res) => {
     if (targetSec && targetSec > 0) hardTrimToDuration(wavPath, targetSec);
 
     const wavUrl = `${publicBaseUrl(req)}/temp/${path.basename(wavPath)}`;
-    const mp3Url = (process.env.ENABLE_MP3 === '1')
-      ? `${publicBaseUrl(req)}/temp/${path.basename(wavPath).replace(/\.wav$/i, '.mp3')}`
-      : null;
+    console.log(`✅ Préparation terminée, wav accessible : ${wavUrl}`);
 
-    console.log(`✅ Préparation terminée, wav accessible : ${wavUrl}${mp3Url ? ` | mp3: ${mp3Url}` : ''}`);
-
-    return res.json({ wavUrl, mp3Url });
+    return res.json({ wavUrl });
   } catch (err) {
     console.error('❌ Erreur serveur (prepare-main) :', err);
     return res.status(500).json({ error: 'Erreur serveur interne lors de la préparation main' });
@@ -709,13 +577,9 @@ router.post('/play-section', (req, res) => {
 
   const base = publicBaseUrl(req);
   const wavUrl = `${base}/temp/${fileName}`;
-  const mp3Url = (process.env.ENABLE_MP3 === '1')
-    ? `${base}/temp/${fileName.replace(/\.wav$/i, '.mp3')}`
-    : null;
+  console.log(`✅ WAV prêt: ${wavUrl}`);
 
-  console.log(`✅ WAV prêt: ${wavUrl}${mp3Url ? ` | mp3: ${mp3Url}` : ''}`);
-
-  return res.json({ wavUrl, mp3Url, message: 'Lecture WAV confirmée côté serveur' });
+  return res.json({ wavUrl, message: 'Lecture WAV confirmée côté serveur' });
 });
 
 router.get('/stream', (req, res) => {
@@ -802,17 +666,13 @@ router.post('/prepare-all-sections', async (req, res) => {
     const sectionsArray = Array.isArray(pyJson.sections) ? pyJson.sections : [];
     const uploadResults = [];
 
-    // Métadonnées globales
+    // On lira le tempo/signature sur la 1ère MAIN existante pour fournir des métadonnées globales
     let globalBpm = beat.tempo || 120;
     let globalTsNum = 4, globalTsDen = 4;
 
-    // 4️⃣ Normalisation + Conversion + Upload Supabase
+    // 4️⃣ Conversion + Upload Supabase
     for (const section of sectionsArray) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
-
-      // 🔧 NORMALISATION IN-PLACE de chaque section
-      normalizeSectionInplace(midPath);
-
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
       // Métadonnées par section
@@ -847,21 +707,6 @@ router.post('/prepare-all-sections', async (req, res) => {
         .upload(`${beatId}/${path.basename(wavPath)}`, wavBuffer, { cacheControl: '3600', upsert: true });
       if (wavErr) console.error(`Erreur upload WAV ${path.basename(wavPath)}:`, wavErr);
 
-      // Upload MP3 optionnel
-      let mp3Url = null;
-      if ((process.env.ENABLE_MP3 || '0') === '1') {
-        const mp3Path = wavPath.replace(/\.wav$/i, '.mp3');
-        if (fs.existsSync(mp3Path)) {
-          const mp3Buffer = fs.readFileSync(mp3Path);
-          const { error: mp3Err } = await supabase
-            .storage
-            .from('midiAndWav')
-            .upload(`${beatId}/${path.basename(mp3Path)}`, mp3Buffer, { cacheControl: '3600', upsert: true });
-          if (mp3Err) console.error(`Erreur upload MP3 ${path.basename(mp3Path)}:`, mp3Err);
-          else mp3Url = `${process.env.SUPABASE_URL}/storage/v1/object/public/midiAndWav/${beatId}/${path.basename(mp3Path)}`;
-        }
-      }
-
       uploadResults.push({
         section: section.sectionName,
         loop: /^Main\s+[ABCD]$/i.test(section.sectionName),
@@ -870,7 +715,6 @@ router.post('/prepare-all-sections', async (req, res) => {
         midiUrl: `${process.env.SUPABASE_URL}/storage/v1/object/public/midiAndWav/${beatId}/${section.midFilename}`,
         wavFilename: path.basename(wavPath),
         wavUrl: `${process.env.SUPABASE_URL}/storage/v1/object/public/midiAndWav/${beatId}/${path.basename(wavPath)}`,
-        mp3Url,
         durationSec,
         bpm: meta.bpm,
         beatsPerBar: meta.ts_num
@@ -943,7 +787,6 @@ router.get('/sequencer-manifest', async (req, res) => {
           midFilename: midName,
           midiUrl: `${baseUrl}/temp/${midName}`,
           wavUrl: `${baseUrl}/temp/${wavName}`,
-          mp3Url: (process.env.ENABLE_MP3 === '1') ? `${baseUrl}/temp/${wavName.replace(/\.wav$/i, '.mp3')}` : null,
           durationSec
         });
       }
@@ -968,4 +811,4 @@ router.get('/sequencer-manifest', async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = router;  
