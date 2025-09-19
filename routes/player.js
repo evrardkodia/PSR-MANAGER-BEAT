@@ -13,13 +13,6 @@ console.log("🚀 routes/player.js chargé");
 // ===== DEBUG HELPERS =====
 const DEBUG_SYNTH = (process.env.DEBUG_SYNTH || '1') !== '0';
 
-function exists(bin) {
-  try {
-    const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [bin], { encoding: 'utf-8' });
-    return r.status === 0;
-  } catch { return false; }
-}
-
 function quoteArg(a) {
   const s = String(a);
   return /[\s"'$`\\]/.test(s) ? `"${s.replace(/(["\\$`])/g, '\\$1')}"` : s;
@@ -44,16 +37,8 @@ const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts');
 const FFPROBE_EXE = 'ffprobe';
 const FFMPEG_EXE = process.env.FFMPEG_PATH || 'ffmpeg';
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
-
-// (optionnels restés pour compat / debug)
+// TiMidity only
 const TIMIDITY_EXE = 'timidity';
-const FLUIDSYNTH_EXE = process.env.FLUIDSYNTH_PATH || 'fluidsynth';
-const DISABLE_FLUIDSYNTH = process.env.DISABLE_FLUIDSYNTH === '1';
-const SF2_MAX_BYTES_FOR_FLUID = Number(process.env.SF2_MAX_BYTES_FOR_FLUID || 300 * 1024 * 1024);
-
-function sf2SizeBytes() {
-  try { return fs.statSync(SF2_PATH).size; } catch { return 0; }
-}
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -65,14 +50,6 @@ function publicBaseUrl(req) {
   const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   return `${proto}://${host}`;
-}
-
-// (encore dispo si utile ailleurs)
-function binExists(cmd) {
-  try {
-    const r = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf-8' });
-    return r.status === 0;
-  } catch { return false; }
 }
 
 async function downloadStyFromUrl(url, destPath) {
@@ -300,15 +277,12 @@ function getMidiDurationSec(midPath) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   🎯 CONVERSION ⇒ render_xg.py + trim ffmpeg
-   (fidèle à ton SF2, avec pré-setup XG)
-   Env optionnels :
-     - RENDER_SR (44100 par défaut)
-     - RENDER_ENGINE (auto|fluidsynth|timidity)
-     - RENDER_XG_FLAGS (ex: "--fs-reverb --drums 9,10")
+   🎯 CONVERSION ⇒ render_xg.py (TiMidity-only) + trim ffmpeg
+   - On force TiMidity côté script Python (pas d’engine à passer)
+   - On évite le double réencodage: on laisse le trim ici
    ────────────────────────────────────────────────────────────── */
 function convertMidToWav(midPath, wavPath) {
-  console.log('🎶 Conversion via render_xg.py');
+  console.log('🎶 Conversion via render_xg.py (TiMidity only)');
   console.log('📄 MID :', fileInfo(midPath));
   console.log('🎹 SF2 :', fileInfo(SF2_PATH));
   if (!fs.existsSync(SF2_PATH)) {
@@ -318,10 +292,13 @@ function convertMidToWav(midPath, wavPath) {
   const preTrimWav = wavPath.replace(/\.wav$/i, '_pretrim.wav');
   const py = path.join(SCRIPTS_DIR, 'render_xg.py');
   const sr = process.env.RENDER_SR || '44100';
-  const engine = process.env.RENDER_ENGINE || 'auto';
+
+  // Flags pour render_xg.py :
+  //  - pas d’engine (script timidity-only)
+  //  - on demande de NE PAS normaliser via ffmpeg dans le script (on le fait ici)
   const envFlags = (process.env.RENDER_XG_FLAGS || '').trim();
-  const extra = envFlags ? envFlags.split(/\s+/).filter(Boolean) : ['--drums', '9,10']; // fallback sûr
-  const args = [py, midPath, preTrimWav, '--sf2', SF2_PATH, '--sr', sr, '--engine', engine, ...extra];
+  const extra = envFlags ? envFlags.split(/\s+/).filter(Boolean) : [];
+  const args = [py, midPath, preTrimWav, '--sf2', SF2_PATH, '--sr', sr, '--no-ffmpeg-fix', ...extra];
 
   if (DEBUG_SYNTH) console.log('🔧 CMD render_xg.py:', fmtCmd('python3', args));
   const r = spawnSync('python3', args, { encoding: 'utf-8' });
@@ -351,7 +328,7 @@ function convertMidToWav(midPath, wavPath) {
 
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
-    console.log('🎶 Conversion via render_xg.py (async)');
+    console.log('🎶 Conversion via render_xg.py (async, TiMidity only)');
     console.log('📄 MID :', fileInfo(midPath));
     console.log('🎹 SF2 :', fileInfo(SF2_PATH));
     if (!fs.existsSync(SF2_PATH)) return reject(new Error(`SoundFont introuvable: ${SF2_PATH}`));
@@ -359,10 +336,9 @@ function convertMidToWavAsync(midPath, wavPath) {
     const preTrimWav = wavPath.replace(/\.wav$/i, '_pretrim.wav');
     const py = path.join(SCRIPTS_DIR, 'render_xg.py');
     const sr = process.env.RENDER_SR || '44100';
-    const engine = process.env.RENDER_ENGINE || 'auto';
     const envFlags = (process.env.RENDER_XG_FLAGS || '').trim();
-    const extra = envFlags ? envFlags.split(/\s+/).filter(Boolean) : ['--drums', '9,10']; // fallback sûr
-    const args = [py, midPath, preTrimWav, '--sf2', SF2_PATH, '--sr', sr, '--engine', engine, ...extra];
+    const extra = envFlags ? envFlags.split(/\s+/).filter(Boolean) : [];
+    const args = [py, midPath, preTrimWav, '--sf2', SF2_PATH, '--sr', sr, '--no-ffmpeg-fix', ...extra];
 
     if (DEBUG_SYNTH) console.log('🔧 CMD render_xg.py:', fmtCmd('python3', args));
     const p = spawn('python3', args);
@@ -441,7 +417,7 @@ router.post('/prepare-main', async (req, res) => {
     // 💡 Injecte tempo/TS + Bank/Program hors drums (9 & 10)
     normalizeSectionInplace(rawMidPath);
 
-    let duration = parseFloat(stdout.trim()); // durée MIDI de la section (si renvoyée)
+    let duration = parseFloat(stdout.trim()); // durée MIDI (si renvoyée)
     if (!Number.isFinite(duration) || duration <= 0) {
       duration = getMidiDurationSec(rawMidPath);
     }
@@ -457,7 +433,7 @@ router.post('/prepare-main', async (req, res) => {
     }
 
     // 🔁 Quantifie la durée au nombre ENTIER de mesures
-    const meta = readMidiMeta(rawMidPath); // { bpm, ts_num, ts_den }
+    const meta = readMidiMeta(rawMidPath);
     const targetSec = quantizeDurationToBars(duration || getMidiDurationSec(rawMidPath) || getWavDurationSec(wavPath), meta.bpm, meta.ts_num);
     if (targetSec && targetSec > 0) hardTrimToDuration(wavPath, targetSec);
 
@@ -587,8 +563,8 @@ router.get('/list-temps', async (req, res) => {
 // --- Préparation + manifest séquenceur (gapless & transitions) ---
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,               // https://xxx.supabase.co
-  process.env.SUPABASE_SERVICE_ROLE_KEY    // clé service_role
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 router.post('/prepare-all-sections', async (req, res) => {
@@ -621,7 +597,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     const sectionsArray = Array.isArray(pyJson.sections) ? pyJson.sections : [];
     const uploadResults = [];
 
-    // On lira le tempo/signature sur la 1ère MAIN existante pour fournir des métadonnées globales
+    // Métadonnées globales (on utilisera la 1re MAIN vue si besoin)
     let globalBpm = beat.tempo || 120;
     let globalTsNum = 4, globalTsDen = 4;
 
@@ -642,9 +618,8 @@ router.post('/prepare-all-sections', async (req, res) => {
       await convertMidToWavAsync(midPath, wavPath);
       if (!fs.existsSync(wavPath)) continue;
 
-      // Durée MIDI brute
+      // Durée quantifiée sur mesures
       const midiDur = getMidiDurationSec(midPath);
-      // 🔁 Durée quantifiée sur mesures (Yamaha-friendly)
       const targetSec = quantizeDurationToBars(midiDur || getWavDurationSec(wavPath), meta.bpm, meta.ts_num);
       if (targetSec && targetSec > 0) hardTrimToDuration(wavPath, targetSec);
 
@@ -687,7 +662,6 @@ router.post('/prepare-all-sections', async (req, res) => {
       'Main D': 'Fill In DD'
     };
 
-    // Métadonnées globales pour scheduler côté front
     const barDurSec = (60 / (globalBpm || 120)) * (globalTsNum || 4);
 
     const manifest = {
@@ -771,4 +745,3 @@ router.get('/sequencer-manifest', async (req, res) => {
 });
 
 module.exports = router;
-
