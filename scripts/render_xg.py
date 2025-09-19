@@ -1,5 +1,5 @@
 # scripts/render_xg.py
-import argparse, tempfile, os, subprocess, sys, shutil, hashlib
+import argparse, tempfile, os, subprocess, sys, shutil, hashlib, shlex
 from mido import MidiFile, MidiTrack, Message, MetaMessage
 
 def log_info(*a):  print("ℹ️", *a, file=sys.stderr, flush=True)
@@ -24,7 +24,7 @@ def run_and_log(cmd, check=False, env=None):
     if check and proc.returncode != 0:
         log_err("exit code:", proc.returncode)
         raise subprocess.CalledProcessError(proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr)
-    return proc
+    return proc, out, err
 
 XG_ON = bytes([0xF0, 0x43, 0x10, 0x4C, 0x00, 0x00, 0x7E, 0x00, 0xF7])
 
@@ -92,7 +92,6 @@ def force_gm_drum(mf: MidiFile, drum_channels=(9,10)) -> MidiFile:
     Rend le comportement de TiMidity prévisible:
       - supprime CC0/CC32 sur CH9/CH10
       - force Program Change 0 (Standard Kit)
-    (Le kit exact XG ne sera pas choisi, mais on évite les 'notes fantômes'.)
     """
     out = MidiFile(ticks_per_beat=mf.ticks_per_beat)
     for tr in mf.tracks:
@@ -101,10 +100,9 @@ def force_gm_drum(mf: MidiFile, drum_channels=(9,10)) -> MidiFile:
             msg = m.copy()
             if not msg.is_meta and hasattr(msg, 'channel') and msg.channel in drum_channels:
                 if msg.type == 'control_change' and msg.control in (0,32):
-                    # drop bank selects on drum channels
                     continue
                 if msg.type == 'program_change':
-                    msg.program = 0  # Standard Kit
+                    msg.program = 0
             nt.append(msg)
         out.tracks.append(nt)
     return out
@@ -118,24 +116,64 @@ def sha16(path):
         return h.hexdigest()[:16]
     except: return "?"
 
-def run_timidity(sf2, mid, wav, sr=44100):
+def _abs_path(p):
+    return os.path.abspath(p)
+
+def run_timidity_forced(sf2, mid, wav, sr=44100):
+    """
+    Forçage strict de TiMidity :
+    - cfg minimal jetable (UNIQUEMENT 'soundfont "<sf2>"')
+    - impose -c <cfg> + TIMIDITY_CFG=<cfg>
+    - verbose (-v) pour vérifier que le SF2 est bien ouvert
+    - échoue si le SF2 mentionné n'apparaît pas dans la sortie
+    """
     if which('timidity') is None:
         log_warn("timidity introuvable dans le PATH")
-        return subprocess.CompletedProcess(args=[], returncode=127)
+        return subprocess.CompletedProcess(args=[], returncode=127), "", ""
+
+    sf2 = _abs_path(sf2)
+    mid = _abs_path(mid)
+    wav = _abs_path(wav)
+
     # cfg MINIMAL → aucune directive exotique
-    cfg = f"soundfont {sf2}\n"
-    with tempfile.NamedTemporaryFile('w', suffix='.cfg', delete=False, encoding='utf-8') as f:
-        f.write(cfg)
-        cfg_path = f.name
+    cfg_text = f'soundfont "{sf2}"\n'
+    fd, cfg_path = tempfile.mkstemp(prefix="timidity_", suffix=".cfg", text=True)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(cfg_text)
+    except Exception:
+        os.close(fd)
+        raise
+
     env = os.environ.copy()
     env['TIMIDITY_CFG'] = cfg_path
-    args = ['timidity','-c', cfg_path, '-Ow','-s', str(sr), '-o', wav, '-EFreverb=0','-EFchorus=0', mid]
-    try:
-        proc = run_and_log(args, env=env)
-    finally:
-        try: os.remove(cfg_path)
-        except: pass
-    return proc
+
+    args = [
+        'timidity',
+        '-c', cfg_path,            # n'utilise QUE ce fichier
+        '-Ow', '-s', str(sr), '-o', wav,
+        '-EFreverb=0', '-EFchorus=0',
+        '-v',                      # verbose -> affiche le SF2 chargé
+        mid
+    ]
+
+    proc, out, err = run_and_log(args, env=env)
+
+    # Vérif anti-fallback : on attend de voir le chemin du SF2 dans la sortie
+    combined = (out + "\n" + err)
+    if sf2 not in combined:
+        # Quelques builds n'impriment pas le chemin complet ; dernier recours:
+        base = os.path.basename(sf2)
+        if base not in combined:
+            try: os.remove(cfg_path)
+            except: pass
+            log_err("Le verbose TiMidity n'indique pas l'ouverture du SF2 attendu :", sf2)
+            return subprocess.CompletedProcess(args=args, returncode=86), out, err
+
+    try: os.remove(cfg_path)
+    except: pass
+
+    return proc, out, err
 
 def main():
     ap = argparse.ArgumentParser(description="Rendu WAV via TiMidity++ (XG setup + normalisation).")
@@ -184,15 +222,16 @@ def main():
     except Exception as e:
         log_err("Échec sauvegarde MIDI préparé:", e); sys.exit(4)
 
-    # TiMidity only
-    p = run_timidity(args.sf2, mid_fixed, args.wav_out, sr=args.sr)
+    # TiMidity (forçage strict)
+    proc, out, err = run_timidity_forced(args.sf2, mid_fixed, args.wav_out, sr=args.sr)
 
     try: os.remove(mid_fixed)
     except: pass
 
-    if p.returncode != 0 or not os.path.isfile(args.wav_out):
-        log_err("Rendu audio échoué. Code:", p.returncode)
-        sys.exit(p.returncode or 1)
+    # Échec explicite si pas de rendu (ou si la vérif anti-fallback a échoué)
+    if proc.returncode != 0 or not os.path.isfile(args.wav_out) or os.path.getsize(args.wav_out) == 0:
+        log_err("Rendu audio échoué. Code:", proc.returncode)
+        sys.exit(proc.returncode or 1)
 
     # Normalisation WAV (PCM 16-bit / 44.1k)
     if not args.no_ffmpeg_fix:
