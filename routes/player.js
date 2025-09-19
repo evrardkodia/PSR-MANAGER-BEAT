@@ -110,12 +110,14 @@ function extractMainWithPython(inputMidPath, outputMidPath, sectionName) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Normalisation MIDI au tick 0 (Bank/Program + tempo/TS)
+   Normalisation MIDI au tick 0 (tempo/TS + Bank/Program hors drums)
    ────────────────────────────────────────────────────────────── */
 function normalizeSectionInplace(sectionMidPath) {
   const pyCode = `
 import sys
 from mido import MidiFile, MidiTrack, Message, MetaMessage
+
+DRUMS = {9, 10}  # 0-based (CH10/CH11 humain)
 
 sec_path = sys.argv[1]
 mf = MidiFile(sec_path)
@@ -137,20 +139,19 @@ for tr in mf.tracks:
         if hasattr(msg, 'channel'):
             ch = msg.channel
             if msg.type == 'control_change':
-                if msg.control == 0 and ch not in first_cc0:
-                    first_cc0[ch] = msg.value
-                elif msg.control == 32 and ch not in first_cc32:
-                    first_cc32[ch] = msg.value
-            elif msg.type == 'program_change' and ch not in first_pc:
+                if ch not in DRUMS:
+                    if msg.control == 0 and ch not in first_cc0:
+                        first_cc0[ch] = msg.value
+                    elif msg.control == 32 and ch not in first_cc32:
+                        first_cc32[ch] = msg.value
+            elif msg.type == 'program_change' and ch not in DRUMS and ch not in first_pc:
                 first_pc[ch] = msg.program
                 channels_seen.add(ch)
             elif msg.type == 'note_on' and msg.velocity > 0:
                 channels_seen.add(ch)
 
-if not channels_seen and not first_tempo and not first_ts:
-    print("normalized: none"); sys.exit(0)
-
 setup = MidiTrack()
+# Tempo / Time Signature au tick 0
 if first_tempo:
     setup.append(MetaMessage('set_tempo', tempo=first_tempo.tempo, time=0))
 if first_ts:
@@ -161,13 +162,19 @@ if first_ts:
                              notated_32nd_notes_per_beat=getattr(first_ts, 'notated_32nd_notes_per_beat', 8),
                              time=0))
 
-for ch in sorted(channels_seen):
-    if ch in first_cc0:
-        setup.append(Message('control_change', channel=ch, control=0, value=first_cc0[ch], time=0))
-    if ch in first_cc32:
-        setup.append(Message('control_change', channel=ch, control=32, value=first_cc32[ch], time=0))
-    if ch in first_pc:
-        setup.append(Message('program_change', channel=ch, program=first_pc[ch], time=0))
+# Réémettre Bank/Program seulement pour canaux NON drums
+for ch in sorted(set(first_cc0) | set(first_cc32) | set(first_pc)):
+    if ch in DRUMS:
+        continue
+    msb = first_cc0.get(ch, None)
+    lsb = first_cc32.get(ch, None)
+    pc  = first_pc.get(ch, None)
+    if msb is not None:
+        setup.append(Message('control_change', channel=ch, control=0, value=msb, time=0))
+    if lsb is not None:
+        setup.append(Message('control_change', channel=ch, control=32, value=lsb, time=0))
+    if pc is not None:
+        setup.append(Message('program_change', channel=ch, program=pc, time=0))
 
 new_mf = MidiFile(ticks_per_beat=tpb)
 new_mf.tracks.append(setup)
@@ -178,7 +185,7 @@ for tr in mf.tracks:
     new_mf.tracks.append(nt)
 
 new_mf.save(sec_path)
-print("normalized:", sec_path)
+print("normalized_no_drums_bank:", sec_path)
 `;
   const out = spawnSync('python3', ['-c', pyCode, sectionMidPath], { encoding: 'utf-8' });
   if (DEBUG_SYNTH) {
@@ -295,10 +302,10 @@ function getMidiDurationSec(midPath) {
 /* ──────────────────────────────────────────────────────────────
    🎯 CONVERSION ⇒ render_xg.py + trim ffmpeg
    (fidèle à ton SF2, avec pré-setup XG)
-   Variables d’env utiles :
+   Env optionnels :
      - RENDER_SR (44100 par défaut)
      - RENDER_ENGINE (auto|fluidsynth|timidity)
-     - RENDER_XG_FLAGS (flags passés à render_xg.py)
+     - RENDER_XG_FLAGS (ex: "--fs-reverb --drums 9,10")
    ────────────────────────────────────────────────────────────── */
 function convertMidToWav(midPath, wavPath) {
   console.log('🎶 Conversion via render_xg.py');
@@ -312,7 +319,8 @@ function convertMidToWav(midPath, wavPath) {
   const py = path.join(SCRIPTS_DIR, 'render_xg.py');
   const sr = process.env.RENDER_SR || '44100';
   const engine = process.env.RENDER_ENGINE || 'auto';
-  const extra = (process.env.RENDER_XG_FLAGS || '').trim().split(/\s+/).filter(Boolean);
+  const envFlags = (process.env.RENDER_XG_FLAGS || '').trim();
+  const extra = envFlags ? envFlags.split(/\s+/).filter(Boolean) : ['--drums', '9,10']; // fallback sûr
   const args = [py, midPath, preTrimWav, '--sf2', SF2_PATH, '--sr', sr, '--engine', engine, ...extra];
 
   if (DEBUG_SYNTH) console.log('🔧 CMD render_xg.py:', fmtCmd('python3', args));
@@ -352,7 +360,8 @@ function convertMidToWavAsync(midPath, wavPath) {
     const py = path.join(SCRIPTS_DIR, 'render_xg.py');
     const sr = process.env.RENDER_SR || '44100';
     const engine = process.env.RENDER_ENGINE || 'auto';
-    const extra = (process.env.RENDER_XG_FLAGS || '').trim().split(/\s+/).filter(Boolean);
+    const envFlags = (process.env.RENDER_XG_FLAGS || '').trim();
+    const extra = envFlags ? envFlags.split(/\s+/).filter(Boolean) : ['--drums', '9,10']; // fallback sûr
     const args = [py, midPath, preTrimWav, '--sf2', SF2_PATH, '--sr', sr, '--engine', engine, ...extra];
 
     if (DEBUG_SYNTH) console.log('🔧 CMD render_xg.py:', fmtCmd('python3', args));
@@ -429,7 +438,7 @@ router.post('/prepare-main', async (req, res) => {
     const sectionName = `Main ${mainLetter}`;
     const stdout = extractMainWithPython(fullMidPath, rawMidPath, sectionName);
 
-    // 💡 Injecte au tick 0 l’état des banques/kits + tempo/TS
+    // 💡 Injecte tempo/TS + Bank/Program hors drums (9 & 10)
     normalizeSectionInplace(rawMidPath);
 
     let duration = parseFloat(stdout.trim()); // durée MIDI de la section (si renvoyée)
@@ -578,7 +587,7 @@ router.get('/list-temps', async (req, res) => {
 // --- Préparation + manifest séquenceur (gapless & transitions) ---
 
 const supabase = createClient(
-  process.env.SUPABASE_URL,               // https://swtbkiudmfvnywcgpzfe.supabase.co
+  process.env.SUPABASE_URL,               // https://xxx.supabase.co
   process.env.SUPABASE_SERVICE_ROLE_KEY    // clé service_role
 );
 
@@ -620,7 +629,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     for (const section of sectionsArray) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
 
-      // 💡 Normalise l’état des banques/kits au tick 0
+      // 💡 Normalise tempo/TS + bank/program hors 9/10
       normalizeSectionInplace(midPath);
 
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
@@ -762,3 +771,4 @@ router.get('/sequencer-manifest', async (req, res) => {
 });
 
 module.exports = router;
+
