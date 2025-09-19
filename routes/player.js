@@ -37,8 +37,7 @@ const SCRIPTS_DIR = path.join(__dirname, '..', 'scripts');
 const FFPROBE_EXE = 'ffprobe';
 const FFMPEG_EXE = process.env.FFMPEG_PATH || 'ffmpeg';
 const SF2_PATH = process.env.SF2_PATH || path.join(__dirname, '..', 'soundfonts', 'Yamaha_PSR.sf2');
-// TiMidity only
-const TIMIDITY_EXE = 'timidity';
+const TIMIDITY_EXE = 'timidity'; // TiMidity only
 
 if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -101,7 +100,6 @@ mf = MidiFile(sec_path)
 tpb = mf.ticks_per_beat
 
 first_cc0, first_cc32, first_pc = {}, {}, {}
-channels_seen = set()
 first_tempo = None
 first_ts = None
 
@@ -123,12 +121,8 @@ for tr in mf.tracks:
                         first_cc32[ch] = msg.value
             elif msg.type == 'program_change' and ch not in DRUMS and ch not in first_pc:
                 first_pc[ch] = msg.program
-                channels_seen.add(ch)
-            elif msg.type == 'note_on' and msg.velocity > 0:
-                channels_seen.add(ch)
 
 setup = MidiTrack()
-# Tempo / Time Signature au tick 0
 if first_tempo:
     setup.append(MetaMessage('set_tempo', tempo=first_tempo.tempo, time=0))
 if first_ts:
@@ -139,7 +133,6 @@ if first_ts:
                              notated_32nd_notes_per_beat=getattr(first_ts, 'notated_32nd_notes_per_beat', 8),
                              time=0))
 
-# Réémettre Bank/Program seulement pour canaux NON drums
 for ch in sorted(set(first_cc0) | set(first_cc32) | set(first_pc)):
     if ch in DRUMS:
         continue
@@ -276,13 +269,51 @@ function getMidiDurationSec(midPath) {
   return null;
 }
 
+// ---------- TiMidity: forçage strict de l'utilisation DU SF2 ----------
+function makeTimidityCfg(sf2Path) {
+  const cfg = `soundfont "${String(sf2Path).replace(/"/g, '\\"')}"\n`; // cfg minimal SANS include/source
+  const cfgPath = path.join(TEMP_DIR, `timidity_${Date.now()}_${Math.random().toString(36).slice(2)}.cfg`);
+  fs.writeFileSync(cfgPath, cfg, 'utf-8');
+  return cfgPath;
+}
+
+function renderWithTimidity(midPath, wavPath, sf2Path, sampleRate = '44100') {
+  const mid = path.resolve(midPath);
+  const wav = path.resolve(wavPath);
+  const sf2 = path.resolve(sf2Path);
+  const cfgPath = makeTimidityCfg(sf2);
+
+  const args = [
+    '-c', cfgPath,
+    '-Ow', '-o', wav,
+    '-s', String(sampleRate),
+    '-EFchorus=0', '-EFreverb=0',
+    '-v',
+    mid
+  ];
+  const env = { ...process.env, TIMIDITY_CFG: cfgPath };
+
+  if (DEBUG_SYNTH) console.log('🔧 CMD timidity:', fmtCmd(TIMIDITY_EXE, args), '\nENV.TIMIDITY_CFG=', env.TIMIDITY_CFG);
+  const proc = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8', env });
+
+  if (proc.stdout?.trim()) console.log('📄 timidity stdout:', proc.stdout.trim());
+  if (proc.stderr?.trim()) console.warn('⚠️ timidity stderr:', proc.stderr.trim());
+
+  const combined = (proc.stdout || '') + '\n' + (proc.stderr || '');
+  const sf2Base = path.basename(sf2);
+  if (proc.status !== 0 || !fs.existsSync(wav) || !combined.includes(sf2Base)) {
+    try { fs.unlinkSync(cfgPath); } catch {}
+    throw new Error(`TiMidity n'a pas confirmé l'utilisation de ${sf2Base} (fallback interdit). Code=${proc.status}`);
+  }
+
+  try { fs.unlinkSync(cfgPath); } catch {}
+}
+
 /* ──────────────────────────────────────────────────────────────
-   🎯 CONVERSION ⇒ render_xg.py (TiMidity-only) + trim ffmpeg
-   - On force TiMidity côté script Python (pas d’engine à passer)
-   - On évite le double réencodage: on laisse le trim ici
+   🎯 CONVERSION ⇒ TiMidity forcé + trim ffmpeg
    ────────────────────────────────────────────────────────────── */
 function convertMidToWav(midPath, wavPath) {
-  console.log('🎶 Conversion via render_xg.py (TiMidity only)');
+  console.log('🎶 Conversion via TiMidity (FORCÉ, cfg minimal)');
   console.log('📄 MID :', fileInfo(midPath));
   console.log('🎹 SF2 :', fileInfo(SF2_PATH));
   if (!fs.existsSync(SF2_PATH)) {
@@ -290,24 +321,9 @@ function convertMidToWav(midPath, wavPath) {
   }
 
   const preTrimWav = wavPath.replace(/\.wav$/i, '_pretrim.wav');
-  const py = path.join(SCRIPTS_DIR, 'render_xg.py');
   const sr = process.env.RENDER_SR || '44100';
 
-  // Flags pour render_xg.py :
-  //  - pas d’engine (script timidity-only)
-  //  - on demande de NE PAS normaliser via ffmpeg dans le script (on le fait ici)
-  const envFlags = (process.env.RENDER_XG_FLAGS || '').trim();
-  const extra = envFlags ? envFlags.split(/\s+/).filter(Boolean) : [];
-  const args = [py, midPath, preTrimWav, '--sf2', SF2_PATH, '--sr', sr, '--no-ffmpeg-fix', ...extra];
-
-  if (DEBUG_SYNTH) console.log('🔧 CMD render_xg.py:', fmtCmd('python3', args));
-  const r = spawnSync('python3', args, { encoding: 'utf-8' });
-
-  if (r.stdout?.trim()) console.log('🐍 render_xg.py stdout:', r.stdout.trim());
-  if (r.stderr?.trim()) console.warn('🐍 render_xg.py stderr:', r.stderr.trim());
-  if (r.status !== 0 || !fs.existsSync(preTrimWav)) {
-    throw new Error(`render_xg.py a échoué (code ${r.status}).`);
-  }
+  renderWithTimidity(midPath, preTrimWav, SF2_PATH, sr);
 
   const filter =
     'areverse,' +
@@ -328,48 +344,39 @@ function convertMidToWav(midPath, wavPath) {
 
 function convertMidToWavAsync(midPath, wavPath) {
   return new Promise((resolve, reject) => {
-    console.log('🎶 Conversion via render_xg.py (async, TiMidity only)');
+    console.log('🎶 Conversion via TiMidity (async, FORCÉ, cfg minimal)');
     console.log('📄 MID :', fileInfo(midPath));
     console.log('🎹 SF2 :', fileInfo(SF2_PATH));
     if (!fs.existsSync(SF2_PATH)) return reject(new Error(`SoundFont introuvable: ${SF2_PATH}`));
 
     const preTrimWav = wavPath.replace(/\.wav$/i, '_pretrim.wav');
-    const py = path.join(SCRIPTS_DIR, 'render_xg.py');
     const sr = process.env.RENDER_SR || '44100';
-    const envFlags = (process.env.RENDER_XG_FLAGS || '').trim();
-    const extra = envFlags ? envFlags.split(/\s+/).filter(Boolean) : [];
-    const args = [py, midPath, preTrimWav, '--sf2', SF2_PATH, '--sr', sr, '--no-ffmpeg-fix', ...extra];
 
-    if (DEBUG_SYNTH) console.log('🔧 CMD render_xg.py:', fmtCmd('python3', args));
-    const p = spawn('python3', args);
-    let pyOut = '', pyErr = '';
-    p.stdout?.on('data', d => pyOut += d.toString());
-    p.stderr?.on('data', d => pyErr += d.toString());
-    p.on('error', reject);
-    p.on('close', code => {
-      if (pyOut.trim()) console.log('🐍 render_xg.py stdout:', pyOut.trim());
-      if (pyErr.trim()) console.warn('🐍 render_xg.py stderr:', pyErr.trim());
-      if (code !== 0 || !fs.existsSync(preTrimWav)) return reject(new Error(`render_xg.py exit ${code}`));
+    try {
+      renderWithTimidity(midPath, preTrimWav, SF2_PATH, sr);
+    } catch (e) {
+      return reject(e);
+    }
 
-      const filter =
-        'areverse,' +
-        'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
-        'areverse,' +
-        'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
-      const fArgs = ['-y','-i', preTrimWav, '-af', filter, '-acodec','pcm_s16le','-ar', sr, wavPath];
-      if (DEBUG_SYNTH) console.log('🔧 CMD (ffmpeg trim):', fmtCmd(FFMPEG_EXE, fArgs));
+    const filter =
+      'areverse,' +
+      'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
+      'areverse,' +
+      'silenceremove=start_periods=1:start_silence=0.02:start_threshold=-40dB';
+    const fArgs = ['-y','-i', preTrimWav, '-af', filter, '-acodec','pcm_s16le','-ar', sr, wavPath];
+    if (DEBUG_SYNTH) console.log('🔧 CMD (ffmpeg trim):', fmtCmd(FFMPEG_EXE, fArgs));
 
-      const ff = spawn(FFMPEG_EXE, fArgs);
-      let fo = '', fe = '';
-      ff.stdout?.on('data', d => fo += d.toString());
-      ff.stderr?.on('data', d => fe += d.toString());
-      ff.on('error', reject);
-      ff.on('close', c => {
-        try { fs.unlinkSync(preTrimWav); } catch {}
-        if (c !== 0 || !fs.existsSync(wavPath)) return reject(new Error(`ffmpeg exit ${c}`));
-        console.log(`✅ Conversion + hard trim OK →`, fileInfo(wavPath));
-        resolve();
-      });
+    const ff = spawn(FFMPEG_EXE, fArgs, { encoding: 'utf-8' });
+    let fe = '';
+    ff.stderr?.on('data', d => fe += d.toString());
+    ff.on('error', reject);
+    ff.on('close', c => {
+      try { fs.unlinkSync(preTrimWav); } catch {}
+      if (c !== 0 || !fs.existsSync(wavPath)) {
+        return reject(new Error(`ffmpeg exit ${c}: ${fe}`));
+      }
+      console.log(`✅ Conversion + hard trim OK →`, fileInfo(wavPath));
+      resolve();
     });
   });
 }
@@ -417,7 +424,7 @@ router.post('/prepare-main', async (req, res) => {
     // 💡 Injecte tempo/TS + Bank/Program hors drums (9 & 10)
     normalizeSectionInplace(rawMidPath);
 
-    let duration = parseFloat(stdout.trim()); // durée MIDI (si renvoyée)
+    let duration = parseFloat(stdout.trim());
     if (!Number.isFinite(duration) || duration <= 0) {
       duration = getMidiDurationSec(rawMidPath);
     }
@@ -597,7 +604,7 @@ router.post('/prepare-all-sections', async (req, res) => {
     const sectionsArray = Array.isArray(pyJson.sections) ? pyJson.sections : [];
     const uploadResults = [];
 
-    // Métadonnées globales (on utilisera la 1re MAIN vue si besoin)
+    // Métadonnées globales
     let globalBpm = beat.tempo || 120;
     let globalTsNum = 4, globalTsDen = 4;
 
@@ -605,12 +612,10 @@ router.post('/prepare-all-sections', async (req, res) => {
     for (const section of sectionsArray) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
 
-      // 💡 Normalise tempo/TS + bank/program hors 9/10
       normalizeSectionInplace(midPath);
 
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
-      // Métadonnées par section
       const meta = readMidiMeta(midPath);
       if (!globalBpm) globalBpm = meta.bpm;
       if (globalTsNum === 4 && globalTsDen === 4) { globalTsNum = meta.ts_num; globalTsDen = meta.ts_den; }
@@ -618,7 +623,6 @@ router.post('/prepare-all-sections', async (req, res) => {
       await convertMidToWavAsync(midPath, wavPath);
       if (!fs.existsSync(wavPath)) continue;
 
-      // Durée quantifiée sur mesures
       const midiDur = getMidiDurationSec(midPath);
       const targetSec = quantizeDurationToBars(midiDur || getWavDurationSec(wavPath), meta.bpm, meta.ts_num);
       if (targetSec && targetSec > 0) hardTrimToDuration(wavPath, targetSec);
