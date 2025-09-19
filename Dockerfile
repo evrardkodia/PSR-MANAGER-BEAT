@@ -63,7 +63,7 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Télécharger le SoundFont
 RUN mkdir -p /app/soundfonts && \
-    curl -L -o /app/soundfonts/Yamaha_PSR.sf2 https://github.com/evrardkodia/soundonts/releases/download/v1.0/Yamaha_PSR.sf2
+    curl -L -o /app/soundfonts/Yamaha_PSR.sf2 https://github.com/evrardkodia/PSR-MANAGER-BEAT/releases/download/v1.0.0/Yamaha_PSR.sf2
 
 # Copier le reste du code
 COPY . .
