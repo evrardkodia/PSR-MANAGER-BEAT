@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Installer les dépendances système nécessaires (FFmpeg ajouté)
+# Installer les dépendances système nécessaires (FFmpeg inclus)
 RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
@@ -22,9 +22,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     ffmpeg
 
-# ✅ Installation de Timidity (sans suppression préalable)
-RUN apt update && \
-    apt install -y timidity timidity-interfaces-extra && \
+# ✅ Installation de TiMidity
+RUN apt-get update && \
+    apt-get install -y timidity timidity-interfaces-extra && \
     timidity --version
 
 # Nettoyage
@@ -37,7 +37,7 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg -
     apt-get install -y nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Cloner et compiler FluidSynth (dernière version stable) avec sous-modules
+# Cloner et compiler FluidSynth (dernière version stable)
 RUN git clone --recurse-submodules --depth 1 https://github.com/FluidSynth/fluidsynth.git /tmp/fluidsynth && \
     mkdir /tmp/fluidsynth/build && \
     cd /tmp/fluidsynth/build && \
@@ -50,8 +50,8 @@ RUN git clone --recurse-submodules --depth 1 https://github.com/FluidSynth/fluid
 WORKDIR /app
 
 # Copier les fichiers de configuration
-COPY package*.json ./ 
-COPY requirements.txt ./ 
+COPY package*.json ./
+COPY requirements.txt ./
 COPY prisma ./prisma
 
 # Installer les dépendances Node.js et Prisma
@@ -61,11 +61,10 @@ RUN npx prisma generate
 # Installer les dépendances Python
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Télécharger le SoundFont
-RUN mkdir -p /app/soundfonts && \
-    curl -L -o /app/soundfonts/Yamaha_PSR.sf2 https://github.com/evrardkodia/soundonts/releases/download/v1.0/Yamaha_PSR.sf2
+# ⚠️ Étape supprimée : plus de téléchargement du SoundFont,
+# car il est déjà présent dans le repo via Git LFS.
 
-# Copier le reste du code
+# Copier le reste du code (y compris le SF2 suivi par Git LFS)
 COPY . .
 
 # Exposer le port
