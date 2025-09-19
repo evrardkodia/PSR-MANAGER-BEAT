@@ -39,11 +39,10 @@ XG_ON = bytes([0xF0, 0x43, 0x10, 0x4C, 0x00, 0x00, 0x7E, 0x00, 0xF7])
 # ──────────────────────────────────────────────────────────────
 def ensure_xg_setup(mf: MidiFile, reverb=40, chorus=0, pb_range=2) -> MidiFile:
     """
-    Injecte XG System On + quelques defaults (CC7/10/11, CC91/93, RPN pitch-bend).
-    Ne force PAS les drums ici (on laisse le fichier décider, ou on gère côté moteur).
+    Injecte XG System On + defaults (CC7/10/11, CC91/93, RPN pitch-bend).
+    Ne force PAS les drums ici (on laisse le fichier décider).
     """
     setup = MidiTrack()
-    # XG System On (mido enlève F0/F7)
     setup.append(Message('sysex', data=XG_ON[1:-1], time=0))
 
     for ch in range(16):
@@ -71,13 +70,11 @@ def ensure_xg_setup(mf: MidiFile, reverb=40, chorus=0, pb_range=2) -> MidiFile:
     return out
 
 def collect_first_bank_pc(mf: MidiFile):
-    """
-    Retourne, pour chaque canal, le premier CC0 (MSB), CC32 (LSB) et PC rencontrés.
-    """
+    """Retourne, pour chaque canal, le premier CC0 (MSB), CC32 (LSB) et PC rencontrés."""
     first_cc0, first_cc32, first_pc = {}, {}, {}
     for tr in mf.tracks:
         for m in tr:
-            if m.is_meta or not hasattr(m, 'channel'): 
+            if m.is_meta or not hasattr(m, 'channel'):
                 continue
             ch = m.channel
             if m.type == 'control_change':
@@ -90,21 +87,21 @@ def collect_first_bank_pc(mf: MidiFile):
 def reemit_banks_programs_at_zero(mf: MidiFile) -> MidiFile:
     """
     Réémet les premiers CC0/CC32/PC de CHAQUE canal à t=0
-    dans l'ordre standard CC0 (MSB) → CC32 (LSB) → PC.
+    dans l'ordre CC0 (MSB) → CC32 (LSB) → PC.
     """
     cc0, cc32, pc = collect_first_bank_pc(mf)
     for ch in range(16):
-        msb = cc0.get(ch, None)
-        lsb = cc32.get(ch, None)
-        prg = pc.get(ch, None)
+        msb = cc0.get(ch)
+        lsb = cc32.get(ch)
+        prg = pc.get(ch)
         if msb is not None or lsb is not None or prg is not None:
             log_info(f"CH{ch+1:02d} bank/program init: MSB={msb} LSB={lsb} PC={prg}")
 
     setup = MidiTrack()
     for ch in range(16):
-        msb = cc0.get(ch, None)
-        lsb = cc32.get(ch, None)
-        prg = pc.get(ch, None)
+        msb = cc0.get(ch)
+        lsb = cc32.get(ch)
+        prg = pc.get(ch)
         if msb is not None:
             setup.append(Message('control_change', channel=ch, control=0, value=msb, time=0))
         if lsb is not None:
@@ -135,7 +132,7 @@ def drum_notes_stats(mf: MidiFile, drum_channels=(9,10)):
     if used:
         top = sorted(used.items(), key=lambda kv: (-kv[1], kv[0]))
         show = ", ".join([f"{n}({c})" for n, c in top[:50]])
-        log_info(f"Notes drums rencontrées (note MIDI (count)):", show)
+        log_info("Notes drums rencontrées (note MIDI (count)):", show)
     else:
         log_info("Aucune note rencontrée sur canaux drums:", drum_channels)
 
@@ -174,7 +171,7 @@ def apply_drum_note_remap(mf: MidiFile, mapping, drum_channels=(9,10)) -> MidiFi
 # ──────────────────────────────────────────────────────────────
 # Moteurs de rendu
 # ──────────────────────────────────────────────────────────────
-def run_fluidsynth(sf2, mid, wav, sr=44100, enable_reverb=False, enable_chorus=False, drums_channels=(9,10), extra_opts=None):
+def run_fluidsynth(sf2, mid, wav, sr=44100, enable_reverb=False, enable_chorus=False, extra_opts=None):
     if which('fluidsynth') is None:
         log_warn("fluidsynth introuvable dans le PATH")
         return subprocess.CompletedProcess(args=[], returncode=127)
@@ -187,30 +184,19 @@ def run_fluidsynth(sf2, mid, wav, sr=44100, enable_reverb=False, enable_chorus=F
         '-o',f'synth.reverb.active={"1" if enable_reverb else "0"}',
         '-o',f'synth.chorus.active={"1" if enable_chorus else "0"}',
     ]
-
-    # Marquer explicitement les canaux drums côté FluidSynth
-    for ch in drums_channels:
-        if 0 <= ch <= 15:
-            args += ['-o', f'synth.drums-channel={ch}']
-
     if extra_opts:
-        # extra_opts doit être une liste style ['-o','foo=bar','-o','baz=qux']
+        # extra_opts: liste style ['-o','foo=bar','-o','baz=qux']
         args += list(extra_opts)
-
     args += [sf2, mid]
     return run_and_log(args)
 
-def run_timidity(sf2, mid, wav, sr=44100, map_127_to_128=True):
+def run_timidity(sf2, mid, wav, sr=44100):
     if which('timidity') is None:
         log_warn("timidity introuvable dans le PATH")
         return subprocess.CompletedProcess(args=[], returncode=127)
 
-    cfg_lines = [f"soundfont {sf2}\n"]
-    # Rediriger bank 127 → 128 (kits) si demandé
-    if map_127_to_128:
-        for prog in range(128):
-            cfg_lines.append(f"map 127 {prog} 128 {prog}\n")
-    cfg = "".join(cfg_lines)
+    # CFG **minimal** pour éviter toute erreur de syntaxe
+    cfg = f"soundfont {sf2}\n"
 
     with tempfile.NamedTemporaryFile('w', suffix='.cfg', delete=False, encoding='utf-8') as f:
         f.write(cfg)
@@ -230,7 +216,7 @@ def run_timidity(sf2, mid, wav, sr=44100, map_127_to_128=True):
 # Main
 # ──────────────────────────────────────────────────────────────
 def main():
-    ap = argparse.ArgumentParser(description="Rendu WAV fidèle au SF2, avec préparation XG, réémission banques/programmes, marquage drums FluidSynth et remap XG→GM optionnel.")
+    ap = argparse.ArgumentParser(description="Rendu WAV fidèle au SF2, avec préparation XG, réémission banques/programmes et remap XG→GM optionnel.")
     ap.add_argument('midi_in', help="Chemin du MIDI source (généré par tes scripts).")
     ap.add_argument('wav_out', help="Chemin du WAV de sortie.")
     ap.add_argument('--sf2', required=True, help="Chemin du SoundFont .sf2")
@@ -238,7 +224,6 @@ def main():
     ap.add_argument('--engine', choices=['auto','fluidsynth','timidity'], default='auto', help="Moteur de synthèse")
     ap.add_argument('--no-xg', action='store_true', help="Ne pas injecter XG System On / defaults")
     ap.add_argument('--no-reemit', action='store_true', help="Ne pas réémettre CC0/32/PC au tick 0")
-    ap.add_argument('--fs-drums', default='9,10', help="Canaux drums pour FluidSynth (ex: '9,10' ou '10' ou '').")
     ap.add_argument('--reverb', type=int, default=40, help="CC91 au tick 0 (0-127)")
     ap.add_argument('--chorus', type=int, default=0, help="CC93 au tick 0 (0-127)")
     ap.add_argument('--pb', type=int, default=2, help="Pitch-bend range en demi-tons (RPN 0,0)")
@@ -254,21 +239,11 @@ def main():
     if not os.path.isfile(args.sf2):
         log_err("SF2 introuvable:", args.sf2); sys.exit(2)
 
-    # Parse canaux drums pour FluidSynth
-    drums_channels = []
-    if args.fs_drums.strip():
-        try:
-            drums_channels = [int(x) for x in args.fs_drums.split(',') if x.strip()!='']
-        except ValueError:
-            log_warn("Paramètre --fs-drums invalide, utilisation 9,10")
-            drums_channels = [9,10]
-
     log_info("MIDI  :", args.midi_in)
     log_info("SF2   :", args.sf2)
     log_info("WAV   :", args.wav_out)
     log_info("SR    :", args.sr)
     log_info("Eng   :", args.engine)
-    log_info("FS drums:", drums_channels if drums_channels else "(aucun)")
 
     # Charger MIDI
     try:
@@ -284,11 +259,11 @@ def main():
         log_info("Prep  : réémission CC0/32/PC au tick 0 (tous canaux)")
         mf = reemit_banks_programs_at_zero(mf)
 
-    # Stats et remap éventuel XG→GM (ciblé sur canaux drums)
-    drum_notes_stats(mf, drum_channels=tuple(drums_channels if drums_channels else (9,10)))
+    # Stats & remap éventuel XG→GM (ciblé drums par défaut CH10/CH11 midi = 9/10)
+    drum_notes_stats(mf, drum_channels=(9,10))
     mapping = load_xg_remap_table(args.xg_remap_json)
     if mapping:
-        mf = apply_drum_note_remap(mf, mapping, drum_channels=tuple(drums_channels if drums_channels else (9,10)))
+        mf = apply_drum_note_remap(mf, mapping, drum_channels=(9,10))
 
     # Sauvegarde MIDI temporaire
     fd, mid_fixed = tempfile.mkstemp(suffix='_xg.mid'); os.close(fd)
@@ -303,8 +278,7 @@ def main():
     if args.engine in ('auto','fluidsynth'):
         log_info("Essai FluidSynth…")
         p = run_fluidsynth(args.sf2, mid_fixed, args.wav_out, sr=args.sr,
-                           enable_reverb=args.fs_reverb, enable_chorus=args.fs_chorus,
-                           drums_channels=tuple(drums_channels if drums_channels else (9,10)))
+                           enable_reverb=args.fs_reverb, enable_chorus=args.fs_chorus)
         if p.returncode == 0 and os.path.isfile(args.wav_out):
             proc = p
         else:
