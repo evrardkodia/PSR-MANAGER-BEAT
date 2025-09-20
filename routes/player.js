@@ -269,41 +269,70 @@ function getMidiDurationSec(midPath) {
   return null;
 }
 
-// ---------- TiMidity: forçage strict de l'utilisation DU SF2 ----------
+// ---------- TiMidity: cfg minimal STRICT + rendu ----------
 function makeTimidityCfg(sf2Path) {
-  const cfg = `soundfont "${String(sf2Path).replace(/"/g, '\\"')}"\n`; // cfg minimal SANS include/source
-  const cfgPath = path.join(TEMP_DIR, `timidity_${Date.now()}_${Math.random().toString(36).slice(2)}.cfg`);
+  // cfg minimal SANS include/source et avec un dir "mort" pour empêcher toute recherche
+  const cfg = [
+    'dir /nonexistent',
+    `soundfont "${String(sf2Path).replace(/"/g, '\\"')}"`
+  ].join('\n') + '\n';
+
+  const cfgPath = path.join(
+    TEMP_DIR,
+    `timidity_${Date.now()}_${Math.random().toString(36).slice(2)}.cfg`
+  );
   fs.writeFileSync(cfgPath, cfg, 'utf-8');
+
+  if (DEBUG_SYNTH) {
+    console.log('🧩 TiMidity CFG path:', cfgPath);
+    console.log('🧩 TiMidity CFG content:\n' + cfg);
+  }
   return cfgPath;
 }
 
 function renderWithTimidity(midPath, wavPath, sf2Path, sampleRate = '44100') {
+  // Chemins absolus
   const mid = path.resolve(midPath);
   const wav = path.resolve(wavPath);
   const sf2 = path.resolve(sf2Path);
+
   const cfgPath = makeTimidityCfg(sf2);
 
+  // -c <cfg>: utilise UNIQUEMENT ce fichier; -idqqq silencieux; effets OFF
   const args = [
     '-c', cfgPath,
     '-Ow', '-o', wav,
     '-s', String(sampleRate),
     '-EFchorus=0', '-EFreverb=0',
-    '-v',
+    '-idqqq',
     mid
   ];
-  const env = { ...process.env, TIMIDITY_CFG: cfgPath };
+  const env = { ...process.env, TIMIDITY_CFG: cfgPath }; // ceinture + bretelles
 
-  if (DEBUG_SYNTH) console.log('🔧 CMD timidity:', fmtCmd(TIMIDITY_EXE, args), '\nENV.TIMIDITY_CFG=', env.TIMIDITY_CFG);
+  if (DEBUG_SYNTH) {
+    console.log('🔧 CMD timidity:', fmtCmd(TIMIDITY_EXE, args));
+    console.log('🔧 ENV.TIMIDITY_CFG =', env.TIMIDITY_CFG);
+  }
+
   const proc = spawnSync(TIMIDITY_EXE, args, { encoding: 'utf-8', env });
 
+  // Logs utiles en cas de souci (même si -idqqq réduit le bruit)
   if (proc.stdout?.trim()) console.log('📄 timidity stdout:', proc.stdout.trim());
   if (proc.stderr?.trim()) console.warn('⚠️ timidity stderr:', proc.stderr.trim());
 
-  const combined = (proc.stdout || '') + '\n' + (proc.stderr || '');
-  const sf2Base = path.basename(sf2);
-  if (proc.status !== 0 || !fs.existsSync(wav) || !combined.includes(sf2Base)) {
+  // ✅ Vérifs réalistes (pas de dépendance au texte des logs)
+  if (proc.status !== 0) {
     try { fs.unlinkSync(cfgPath); } catch {}
-    throw new Error(`TiMidity n'a pas confirmé l'utilisation de ${sf2Base} (fallback interdit). Code=${proc.status}`);
+    throw new Error(`Rendu TiMidity a échoué (exit ${proc.status})`);
+  }
+  if (!fs.existsSync(wav)) {
+    try { fs.unlinkSync(cfgPath); } catch {}
+    throw new Error(`Rendu TiMidity terminé sans WAV de sortie`);
+  }
+  const st = fs.statSync(wav);
+  if (!st.size) {
+    try { fs.unlinkSync(cfgPath); } catch {}
+    throw new Error(`WAV vide après rendu TiMidity`);
   }
 
   try { fs.unlinkSync(cfgPath); } catch {}
@@ -323,8 +352,10 @@ function convertMidToWav(midPath, wavPath) {
   const preTrimWav = wavPath.replace(/\.wav$/i, '_pretrim.wav');
   const sr = process.env.RENDER_SR || '44100';
 
+  // 1) Rendu strict avec ton SF2 (échoue si problème réel)
   renderWithTimidity(midPath, preTrimWav, SF2_PATH, sr);
 
+  // 2) Trim/normalisation (comme avant)
   const filter =
     'areverse,' +
     'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
@@ -352,12 +383,14 @@ function convertMidToWavAsync(midPath, wavPath) {
     const preTrimWav = wavPath.replace(/\.wav$/i, '_pretrim.wav');
     const sr = process.env.RENDER_SR || '44100';
 
+    // --- Phase 1: rendu TiMidity (sync pour vérif réaliste) ---
     try {
       renderWithTimidity(midPath, preTrimWav, SF2_PATH, sr);
     } catch (e) {
       return reject(e);
     }
 
+    // --- Phase 2: trim ffmpeg (async) ---
     const filter =
       'areverse,' +
       'silenceremove=start_periods=1:start_silence=0.35:start_threshold=-50dB,' +
@@ -612,10 +645,12 @@ router.post('/prepare-all-sections', async (req, res) => {
     for (const section of sectionsArray) {
       const midPath = path.join(TEMP_DIR, section.midFilename);
 
+      // Normalise tempo/TS + bank/program hors 9/10
       normalizeSectionInplace(midPath);
 
       const wavPath = midPath.replace(/\.mid$/i, '.wav');
 
+      // Métadonnées par section
       const meta = readMidiMeta(midPath);
       if (!globalBpm) globalBpm = meta.bpm;
       if (globalTsNum === 4 && globalTsDen === 4) { globalTsNum = meta.ts_num; globalTsDen = meta.ts_den; }
@@ -623,6 +658,7 @@ router.post('/prepare-all-sections', async (req, res) => {
       await convertMidToWavAsync(midPath, wavPath);
       if (!fs.existsSync(wavPath)) continue;
 
+      // Durée quantifiée sur mesures
       const midiDur = getMidiDurationSec(midPath);
       const targetSec = quantizeDurationToBars(midiDur || getWavDurationSec(wavPath), meta.bpm, meta.ts_num);
       if (targetSec && targetSec > 0) hardTrimToDuration(wavPath, targetSec);
