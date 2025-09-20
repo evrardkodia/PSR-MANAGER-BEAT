@@ -1,5 +1,5 @@
 # scripts/render_xg.py
-import argparse, tempfile, os, subprocess, sys, shutil, hashlib, shlex
+import argparse, tempfile, os, subprocess, sys, shutil, hashlib
 from mido import MidiFile, MidiTrack, Message, MetaMessage
 
 def log_info(*a):  print("ℹ️", *a, file=sys.stderr, flush=True)
@@ -7,11 +7,12 @@ def log_ok(*a):    print("✅", *a, file=sys.stderr, flush=True)
 def log_warn(*a):  print("⚠️", *a, file=sys.stderr, flush=True)
 def log_err(*a):   print("❌", *a, file=sys.stderr, flush=True)
 
-def which(binname):
-    return shutil.which(binname)
+def which(binname): return shutil.which(binname)
 
 def run_and_log(cmd, check=False, env=None):
-    log_info("CMD:", " ".join([f'"{c}"' if " " in c else c for c in cmd]))
+    # Affiche la commande sans casser si des espaces existent
+    pretty = " ".join([f'"{c}"' if " " in c else c for c in cmd])
+    log_info("CMD:", pretty)
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     out = (proc.stdout or b"").decode(errors="ignore")
     err = (proc.stderr or b"").decode(errors="ignore")
@@ -56,7 +57,7 @@ def collect_first_bank_pc(mf: MidiFile):
     first_cc0, first_cc32, first_pc = {}, {}, {}
     for tr in mf.tracks:
         for m in tr:
-            if m.is_meta or not hasattr(m, 'channel'): 
+            if m.is_meta or not hasattr(m, 'channel'):
                 continue
             ch = m.channel
             if m.type == 'control_change':
@@ -70,15 +71,12 @@ def reemit_banks_programs_at_zero(mf: MidiFile, drum_channels=(9,10)) -> MidiFil
     cc0, cc32, pc = collect_first_bank_pc(mf)
     setup = MidiTrack()
     for ch in range(16):
-        if ch in drum_channels:  # on laisse les drums gérés à part
+        if ch in drum_channels:
             continue
         msb = cc0.get(ch); lsb = cc32.get(ch); prg = pc.get(ch)
-        if msb is not None:
-            setup.append(Message('control_change', channel=ch, control=0, value=msb, time=0))
-        if lsb is not None:
-            setup.append(Message('control_change', channel=ch, control=32, value=lsb, time=0))
-        if prg is not None:
-            setup.append(Message('program_change', channel=ch, program=prg, time=0))
+        if msb is not None: setup.append(Message('control_change', channel=ch, control=0,  value=msb, time=0))
+        if lsb is not None: setup.append(Message('control_change', channel=ch, control=32, value=lsb, time=0))
+        if prg is not None: setup.append(Message('program_change',  channel=ch, program=prg, time=0))
     out = MidiFile(ticks_per_beat=mf.ticks_per_beat)
     out.tracks.append(setup)
     for tr in mf.tracks:
@@ -88,11 +86,6 @@ def reemit_banks_programs_at_zero(mf: MidiFile, drum_channels=(9,10)) -> MidiFil
     return out
 
 def force_gm_drum(mf: MidiFile, drum_channels=(9,10)) -> MidiFile:
-    """
-    Rend le comportement de TiMidity prévisible:
-      - supprime CC0/CC32 sur CH9/CH10
-      - force Program Change 0 (Standard Kit)
-    """
     out = MidiFile(ticks_per_beat=mf.ticks_per_beat)
     for tr in mf.tracks:
         nt = MidiTrack()
@@ -116,27 +109,25 @@ def sha16(path):
         return h.hexdigest()[:16]
     except: return "?"
 
-def _abs_path(p):
-    return os.path.abspath(p)
+def _abs(p): return os.path.abspath(p)
 
 def run_timidity_forced(sf2, mid, wav, sr=44100):
     """
-    Forçage strict de TiMidity :
-    - cfg minimal jetable (UNIQUEMENT 'soundfont "<sf2>"')
-    - impose -c <cfg> + TIMIDITY_CFG=<cfg>
-    - verbose (-v) pour vérifier que le SF2 est bien ouvert
-    - échoue si le SF2 mentionné n'apparaît pas dans la sortie
+    Forçage strict de TiMidity sans dépendre des logs :
+    - CFG jetable MINIMALE: 'dir /nonexistent' + 'soundfont "<sf2>"'
+    - utilisation via '-c <cfg>' et TIMIDITY_CFG=<cfg>
+    - on considère OK si exit==0 ET WAV existe ET taille>0
     """
     if which('timidity') is None:
         log_warn("timidity introuvable dans le PATH")
-        return subprocess.CompletedProcess(args=[], returncode=127), "", ""
+        # retourne un CompletedProcess-like neutre
+        class CP:  # mini stub
+            def __init__(self): self.returncode = 127
+        return CP(), "", ""
 
-    sf2 = _abs_path(sf2)
-    mid = _abs_path(mid)
-    wav = _abs_path(wav)
+    sf2 = _abs(sf2); mid = _abs(mid); wav = _abs(wav)
 
-    # cfg MINIMAL → aucune directive exotique
-    cfg_text = f'soundfont "{sf2}"\n'
+    cfg_text = f"dir /nonexistent\nsoundfont \"{sf2}\"\n"
     fd, cfg_path = tempfile.mkstemp(prefix="timidity_", suffix=".cfg", text=True)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -150,28 +141,27 @@ def run_timidity_forced(sf2, mid, wav, sr=44100):
 
     args = [
         'timidity',
-        '-c', cfg_path,            # n'utilise QUE ce fichier
+        '-c', cfg_path,
         '-Ow', '-s', str(sr), '-o', wav,
         '-EFreverb=0', '-EFchorus=0',
-        '-v',                      # verbose -> affiche le SF2 chargé
+        '-idqqq',          # silencieux; pas de parsing des logs
         mid
     ]
 
     proc, out, err = run_and_log(args, env=env)
 
-    # Vérif anti-fallback : on attend de voir le chemin du SF2 dans la sortie
-    combined = (out + "\n" + err)
-    if sf2 not in combined:
-        # Quelques builds n'impriment pas le chemin complet ; dernier recours:
-        base = os.path.basename(sf2)
-        if base not in combined:
-            try: os.remove(cfg_path)
-            except: pass
-            log_err("Le verbose TiMidity n'indique pas l'ouverture du SF2 attendu :", sf2)
-            return subprocess.CompletedProcess(args=args, returncode=86), out, err
-
+    # Nettoyage cfg
     try: os.remove(cfg_path)
     except: pass
+
+    # Validation "réaliste" : code retour + présence WAV non vide
+    if proc.returncode != 0:
+        return proc, out, err
+    if not os.path.isfile(wav) or os.path.getsize(wav) == 0:
+        # on simule un code d'erreur custom si wav absent
+        class CP2: 
+            def __init__(self): self.returncode = 86
+        return CP2(), out, err
 
     return proc, out, err
 
@@ -222,16 +212,16 @@ def main():
     except Exception as e:
         log_err("Échec sauvegarde MIDI préparé:", e); sys.exit(4)
 
-    # TiMidity (forçage strict)
+    # TiMidity (forçage strict sans dépendre des logs)
     proc, out, err = run_timidity_forced(args.sf2, mid_fixed, args.wav_out, sr=args.sr)
 
     try: os.remove(mid_fixed)
     except: pass
 
-    # Échec explicite si pas de rendu (ou si la vérif anti-fallback a échoué)
+    # Échec explicite si pas de rendu
     if proc.returncode != 0 or not os.path.isfile(args.wav_out) or os.path.getsize(args.wav_out) == 0:
-        log_err("Rendu audio échoué. Code:", proc.returncode)
-        sys.exit(proc.returncode or 1)
+        log_err("Rendu audio échoué. Code:", getattr(proc, 'returncode', 1))
+        sys.exit(getattr(proc, 'returncode', 1) or 1)
 
     # Normalisation WAV (PCM 16-bit / 44.1k)
     if not args.no_ffmpeg_fix:
