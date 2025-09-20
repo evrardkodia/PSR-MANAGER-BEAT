@@ -2,9 +2,10 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Installer les dépendances système nécessaires (FFmpeg ajouté)
-RUN apt-get update && apt-get install -y \
+# Dépendances système (FFmpeg inclus)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ca-certificates \
     gnupg \
     git \
     python3 \
@@ -19,57 +20,62 @@ RUN apt-get update && apt-get install -y \
     libpulse-dev \
     libreadline-dev \
     libfftw3-dev \
-    ca-certificates \
-    ffmpeg
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
-# ✅ Installation de Timidity (sans suppression préalable)
-RUN apt update && \
-    apt install -y timidity timidity-interfaces-extra && \
-    timidity --version
+# ✅ TiMidity
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    timidity timidity-interfaces-extra \
+    && rm -rf /var/lib/apt/lists/*
 
-# Nettoyage
-RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+# 🔒 Neutraliser les fallbacks globaux TiMidity (si quelqu’un lance sans -c)
+RUN apt-get purge -y freepats || true && \
+    mkdir -p /etc/timidity && \
+    printf 'dir /nonexistent\n' > /etc/timidity/timidity.cfg && \
+    printf 'dir /nonexistent\n' > /etc/timidity/deny.cfg
+ENV TIMIDITY_CFG=/etc/timidity/deny.cfg
 
-# Installer Node.js 18 depuis NodeSource
-RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/nodesource.gpg && \
+# Node.js 18 (NodeSource)
+RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | \
+    gpg --dearmor -o /etc/apt/trusted.gpg.d/nodesource.gpg && \
     echo "deb https://deb.nodesource.com/node_18.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && \
-    apt-get install -y nodejs && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get update && apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
 
-# Cloner et compiler FluidSynth (dernière version stable) avec sous-modules
+# (Optionnel) FluidSynth — garde si tu en as besoin
 RUN git clone --recurse-submodules --depth 1 https://github.com/FluidSynth/fluidsynth.git /tmp/fluidsynth && \
-    mkdir /tmp/fluidsynth/build && \
-    cd /tmp/fluidsynth/build && \
+    mkdir /tmp/fluidsynth/build && cd /tmp/fluidsynth/build && \
     cmake .. -Denable-ladspa=OFF -Denable-aufile=OFF -Denable-dbus=OFF && \
-    make -j$(nproc) && \
-    make install && \
-    ldconfig
+    make -j"$(nproc)" && make install && ldconfig && \
+    rm -rf /tmp/fluidsynth
 
 # Dossier de travail
 WORKDIR /app
 
-# Copier les fichiers de configuration
-COPY package*.json ./ 
-COPY requirements.txt ./ 
+# Fichiers de config/projet
+COPY package*.json ./
+COPY requirements.txt ./
 COPY prisma ./prisma
 
-# Installer les dépendances Node.js et Prisma
-RUN npm install
-RUN npx prisma generate
+# Dépendances Node & Prisma
+RUN npm install && npx prisma generate
 
-# Installer les dépendances Python
+# Dépendances Python
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Télécharger le SoundFont
-RUN mkdir -p /app/soundfonts && \
-    curl -L -o /app/soundfonts/Yamaha_PSR.sf2 https://github.com/evrardkodia/soundonts/releases/download/v1.0/Yamaha_PSR.sf2
-
-# Copier le reste du code
+# Copier le reste du code (⚠️ sans gros SF2 dans l’image)
 COPY . .
 
-# Exposer le port
+# Variables par défaut (peuvent être surchargées dans Render → Environment)
+ENV SF2_PATH=/app/soundfonts/Yamaha_PSR.sf2
+# Laisse SF2_URL vide par défaut : tu la définis dans Render (ou mets une valeur par défaut dans bin/boot.sh)
+
+# S’assurer que le script de démarrage est exécutable
+RUN test -f /app/bin/boot.sh || (echo '❌ /app/bin/boot.sh manquant' && exit 1) && \
+    chmod +x /app/bin/boot.sh
+
+# Port HTTP
 EXPOSE 10000
 
-# Commande de démarrage
-CMD ["node", "server.js"]
+# Démarrage : passe par ton boot.sh (télécharge SF2 si absent, verrouille TiMidity, lance Node)
+CMD ["/app/bin/boot.sh"]
