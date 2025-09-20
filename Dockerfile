@@ -27,7 +27,7 @@ RUN apt-get update && \
     apt-get install -y timidity timidity-interfaces-extra && \
     timidity --version
 
-# 🔒 Neutraliser tout fallback global (au cas où quelqu’un lance timidity sans -c)
+# 🔒 Neutraliser tout fallback global (si quelqu’un lance timidity sans -c)
 RUN apt-get purge -y freepats || true && \
     mkdir -p /etc/timidity && \
     printf 'dir /nonexistent\n' > /etc/timidity/timidity.cfg && \
@@ -44,7 +44,7 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg -
     apt-get install -y nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# (Optionnel) FluidSynth — laisse si tu en as besoin ailleurs
+# (Optionnel) FluidSynth — garde si tu en as besoin ailleurs
 RUN git clone --recurse-submodules --depth 1 https://github.com/FluidSynth/fluidsynth.git /tmp/fluidsynth && \
     mkdir /tmp/fluidsynth/build && \
     cd /tmp/fluidsynth/build && \
@@ -68,32 +68,62 @@ RUN npx prisma generate
 # Dépendances Python
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Copier le reste du code (le SF2 peut ne PAS être présent dans le contexte — OK)
+# Copier le reste du code (on N’EMBARQUE PAS le gros SF2)
 COPY . .
 
-# Default configurable: où sera cherché le SF2 au runtime
-ENV SF2_PATH=/app/soundfonts/Yamaha_PSR.sf2
+# 🌟 Par défaut, on cherche le SF2 sur un DISQUE PERSISTANT (/data)
+# (Configure un Disk Render monté sur /data)
+ENV SF2_PATH=/data/Yamaha_PSR.sf2
 
-# 🧠 Entry point: récupère le SF2 si absent, force une cfg TiMidity minimale, puis lance Node
+# 🚀 ENTRYPOINT : télécharge le SF2 s’il manque, verrouille la cfg TiMidity, puis lance la commande
 RUN printf '%s\n' '#!/usr/bin/env bash' \
   'set -euo pipefail' \
-  ': "${SF2_PATH:=/app/soundfonts/Yamaha_PSR.sf2}"' \
+  '' \
+  '# --- paramètres ---' \
+  ': "${SF2_PATH:=/data/Yamaha_PSR.sf2}"' \
+  'SF2_DIR="$(dirname "$SF2_PATH")"' \
+  '' \
+  '# --- préparer le dossier cible (/data) ---' \
+  'mkdir -p "$SF2_DIR"' \
+  '' \
+  '# --- télécharger le SF2 si absent ---' \
   'if [[ ! -s "$SF2_PATH" ]]; then' \
   '  if [[ -n "${SF2_URL:-}" ]]; then' \
   '    echo "⬇️  Téléchargement SF2: $SF2_URL -> $SF2_PATH"' \
-  '    mkdir -p "$(dirname "$SF2_PATH")"' \
-  '    curl -L --fail --retry 3 -o "$SF2_PATH" "$SF2_URL"' \
+  '    if [[ -n "${GITHUB_TOKEN:-}" ]]; then' \
+  '      curl -H "Authorization: token ${GITHUB_TOKEN}" -L --fail --retry 3 -o "$SF2_PATH" "$SF2_URL"' \
+  '    else' \
+  '      curl -L --fail --retry 3 -o "$SF2_PATH" "$SF2_URL"' \
+  '    fi' \
   '  else' \
   '    echo "⚠️  SF2 introuvable & SF2_URL non défini. Le rendu risque d’échouer."' \
   '  fi' \
   'fi' \
+  '' \
+  '# --- vérif d’intégrité optionnelle ---' \
+  'if [[ -n "${SF2_SHA256:-}" && -s "$SF2_PATH" ]]; then' \
+  '  echo "🔐 Vérification SHA256..."' \
+  '  calc="$(sha256sum "$SF2_PATH" | awk "{print \$1}")"' \
+  '  if [[ "$calc" != "$SF2_SHA256" ]]; then' \
+  '    echo "❌ SHA256 mismatch: attendu=$SF2_SHA256 obtenu=$calc"' \
+  '    exit 42' \
+  '  fi' \
+  'fi' \
+  '' \
+  '# --- cfg TiMidity MINIMALE : pas d include, 1 seul SF2 ---' \
   'echo -e "dir /nonexistent\nsoundfont \"$SF2_PATH\"" > /etc/timidity/run.cfg' \
   'export TIMIDITY_CFG=/etc/timidity/run.cfg' \
-  'exec node server.js' > /usr/local/bin/entry.sh \
-  && chmod +x /usr/local/bin/entry.sh
+  '' \
+  '# (facultatif) trace courte pour vérifier que timidity voit le SF2' \
+  'timidity -c /etc/timidity/run.cfg -v | tail -n 20 || true' \
+  '' \
+  '# --- lancer la commande passée par CMD ---' \
+  'exec "$@"' > /usr/local/bin/entry.sh && \
+  chmod +x /usr/local/bin/entry.sh
 
 # Port
 EXPOSE 10000
 
-# Démarrage: passe par l’entrypoint pour verrouiller le SF2 à chaque run
-CMD ["/usr/local/bin/entry.sh"]
+# Démarrage via l’entrypoint (il prépare le SF2), puis exécute la commande
+ENTRYPOINT ["/usr/local/bin/entry.sh"]
+CMD ["node", "server.js"]
