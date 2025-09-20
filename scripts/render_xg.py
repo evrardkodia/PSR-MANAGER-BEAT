@@ -7,8 +7,7 @@ def log_ok(*a):    print("✅", *a, file=sys.stderr, flush=True)
 def log_warn(*a):  print("⚠️", *a, file=sys.stderr, flush=True)
 def log_err(*a):   print("❌", *a, file=sys.stderr, flush=True)
 
-def which(binname):
-    return shutil.which(binname)
+def which(binname): return shutil.which(binname)
 
 def run_and_log(cmd, check=False, env=None):
     log_info("CMD:", " ".join([f'"{c}"' if " " in c else c for c in cmd]))
@@ -24,7 +23,7 @@ def run_and_log(cmd, check=False, env=None):
     if check and proc.returncode != 0:
         log_err("exit code:", proc.returncode)
         raise subprocess.CalledProcessError(proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr)
-    return proc
+    return proc, out, err
 
 XG_ON = bytes([0xF0, 0x43, 0x10, 0x4C, 0x00, 0x00, 0x7E, 0x00, 0xF7])
 
@@ -56,7 +55,7 @@ def collect_first_bank_pc(mf: MidiFile):
     first_cc0, first_cc32, first_pc = {}, {}, {}
     for tr in mf.tracks:
         for m in tr:
-            if m.is_meta or not hasattr(m, 'channel'): 
+            if m.is_meta or not hasattr(m, 'channel'):
                 continue
             ch = m.channel
             if m.type == 'control_change':
@@ -70,7 +69,7 @@ def reemit_banks_programs_at_zero(mf: MidiFile, drum_channels=(9,10)) -> MidiFil
     cc0, cc32, pc = collect_first_bank_pc(mf)
     setup = MidiTrack()
     for ch in range(16):
-        if ch in drum_channels:  # on laisse les drums gérés à part
+        if ch in drum_channels:
             continue
         msb = cc0.get(ch); lsb = cc32.get(ch); prg = pc.get(ch)
         if msb is not None:
@@ -88,12 +87,6 @@ def reemit_banks_programs_at_zero(mf: MidiFile, drum_channels=(9,10)) -> MidiFil
     return out
 
 def force_gm_drum(mf: MidiFile, drum_channels=(9,10)) -> MidiFile:
-    """
-    Rend le comportement de TiMidity prévisible:
-      - supprime CC0/CC32 sur CH9/CH10
-      - force Program Change 0 (Standard Kit)
-    (Le kit exact XG ne sera pas choisi, mais on évite les 'notes fantômes'.)
-    """
     out = MidiFile(ticks_per_beat=mf.ticks_per_beat)
     for tr in mf.tracks:
         nt = MidiTrack()
@@ -101,10 +94,9 @@ def force_gm_drum(mf: MidiFile, drum_channels=(9,10)) -> MidiFile:
             msg = m.copy()
             if not msg.is_meta and hasattr(msg, 'channel') and msg.channel in drum_channels:
                 if msg.type == 'control_change' and msg.control in (0,32):
-                    # drop bank selects on drum channels
                     continue
                 if msg.type == 'program_change':
-                    msg.program = 0  # Standard Kit
+                    msg.program = 0
             nt.append(msg)
         out.tracks.append(nt)
     return out
@@ -118,23 +110,49 @@ def sha16(path):
         return h.hexdigest()[:16]
     except: return "?"
 
-def run_timidity(sf2, mid, wav, sr=44100):
+def run_timidity_forced(sf2, mid, wav, sr=44100):
+    """
+    Forçage strict:
+      - écrit un .cfg minimal avec chemin SF2 entre guillemets
+      - lance timidity avec -c <cfg> et -v (verbose)
+      - vérifie dans la sortie que le SF2 est bien mentionné
+      - retourne code 86 si la vérif échoue (anti-fallback)
+    """
     if which('timidity') is None:
         log_warn("timidity introuvable dans le PATH")
         return subprocess.CompletedProcess(args=[], returncode=127)
-    # cfg MINIMAL → aucune directive exotique
-    cfg = f"soundfont {sf2}\n"
-    with tempfile.NamedTemporaryFile('w', suffix='.cfg', delete=False, encoding='utf-8') as f:
-        f.write(cfg)
-        cfg_path = f.name
+
+    sf2 = os.path.abspath(sf2)
+    mid = os.path.abspath(mid)
+    wav = os.path.abspath(wav)
+
+    cfg_text = f'dir /nonexistent\nsoundfont "{sf2}"\n'  # dir “vide” + chemin SF2 entre guillemets
+    fd, cfg_path = tempfile.mkstemp(prefix="timidity_", suffix=".cfg", text=True)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(cfg_text)
+    except Exception:
+        os.close(fd)
+        raise
+
     env = os.environ.copy()
     env['TIMIDITY_CFG'] = cfg_path
-    args = ['timidity','-c', cfg_path, '-Ow','-s', str(sr), '-o', wav, '-EFreverb=0','-EFchorus=0', mid]
-    try:
-        proc = run_and_log(args, env=env)
-    finally:
+
+    args = ['timidity', '-c', cfg_path, '-Ow', '-s', str(sr), '-o', wav,
+            '-EFreverb=0', '-EFchorus=0', '-v', mid]
+
+    proc, out, err = run_and_log(args, env=env)
+
+    # Vérif anti-fallback
+    combined = (out or '') + '\n' + (err or '')
+    if (sf2 not in combined) and (os.path.basename(sf2) not in combined):
+        log_err("Le verbose TiMidity n'indique pas l'ouverture du SF2 attendu :", sf2)
         try: os.remove(cfg_path)
         except: pass
+        return subprocess.CompletedProcess(args=args, returncode=86)
+
+    try: os.remove(cfg_path)
+    except: pass
     return proc
 
 def main():
@@ -160,7 +178,6 @@ def main():
     log_info("WAV  :", args.wav_out)
     log_info("SR   :", args.sr)
 
-    # Chargement et préparation
     try:
         mf = MidiFile(args.midi_in)
     except Exception as e:
@@ -176,7 +193,6 @@ def main():
         log_info("Prep : CH10/11 → Standard GM Drum (PC=0), bank selects ignorés")
         mf = force_gm_drum(mf, drum_channels=(9,10))
 
-    # Sauvegarde temp
     fd, mid_fixed = tempfile.mkstemp(suffix='_xg.mid'); os.close(fd)
     try:
         mf.save(mid_fixed)
@@ -184,17 +200,16 @@ def main():
     except Exception as e:
         log_err("Échec sauvegarde MIDI préparé:", e); sys.exit(4)
 
-    # TiMidity only
-    p = run_timidity(args.sf2, mid_fixed, args.wav_out, sr=args.sr)
+    # Rendu TiMidity (anti-fallback)
+    p = run_timidity_forced(args.sf2, mid_fixed, args.wav_out, sr=args.sr)
 
     try: os.remove(mid_fixed)
     except: pass
 
-    if p.returncode != 0 or not os.path.isfile(args.wav_out):
+    if p.returncode != 0 or not os.path.isfile(args.wav_out) or os.path.getsize(args.wav_out) == 0:
         log_err("Rendu audio échoué. Code:", p.returncode)
         sys.exit(p.returncode or 1)
 
-    # Normalisation WAV (PCM 16-bit / 44.1k)
     if not args.no_ffmpeg_fix:
         if which('ffmpeg') is None:
             log_warn("ffmpeg introuvable, WAV brut conservé")
